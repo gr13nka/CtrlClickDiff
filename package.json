@@ -1,0 +1,18 @@
+{
+  "private": true,
+  "name": "ctrlclickdiff",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "smoke": "pnpm --filter @ctrlclickdiff/backend smoke",
+    "dev:backend": "pnpm --filter @ctrlclickdiff/backend dev",
+    "dev:frontend": "pnpm --filter @ctrlclickdiff/frontend dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

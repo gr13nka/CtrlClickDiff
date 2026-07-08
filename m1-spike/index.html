@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>M1 Spike: Ctrl+Click Peek in Monaco DiffEditor</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  #container { width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+
+<script>
+  // Silence Monaco's main-thread-worker warning by shimming a worker via blob.
+  self.MonacoEnvironment = {
+    getWorkerUrl: function () {
+      return URL.createObjectURL(new Blob([`
+        self.MonacoEnvironment = { baseUrl: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/' };
+        importScripts('https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/base/worker/workerMain.js');
+      `], { type: 'text/javascript' }));
+    }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js"></script>
+<script>
+  require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs' } });
+
+  window.__spike = { calls: [], ready: false, fallbackEnabled: false };
+
+  require(['vs/editor/editor.main'], function () {
+    // Kotlin is bundled + pre-registered by basic-languages. Do NOT call monaco.languages.register().
+
+    const original = monaco.editor.createModel(
+      'fun target() {\n  println("old")\n}\n',
+      'kotlin',
+      monaco.Uri.parse('file:///base/A.kt')
+    );
+
+    const modified = monaco.editor.createModel(
+      'fun target() {\n  println("new")\n}\n' +
+      'fun helperFromB() {}   // placeholder marker only; real decl lives in B.kt\n' +
+      'fun caller() {\n' +
+      '  target()\n' +
+      '  helper()\n' +
+      '}\n',
+      'kotlin',
+      monaco.Uri.parse('file:///head/A.kt')
+    );
+
+    // Cross-file target model MUST exist before peek is requested.
+    const bModel = monaco.editor.createModel(
+      'fun helper() {\n  println("in B")\n}\n',
+      'kotlin',
+      monaco.Uri.parse('file:///head/B.kt')
+    );
+
+    const diff = monaco.editor.createDiffEditor(document.getElementById('container'), {
+      automaticLayout: true
+    });
+    diff.setModel({ original, modified });
+
+    monaco.languages.registerDefinitionProvider('kotlin', {
+      provideDefinition(model, position) {
+        const w = model.getWordAtPosition(position);
+        window.__spike.calls.push({ word: w && w.word, line: position.lineNumber });
+        if (!w) return null;
+        if (w.word === 'target') {
+          // same-file: point at `fun target()` decl line (line 1) in the MODIFIED model
+          return [{ uri: modified.uri, range: new monaco.Range(1, 5, 1, 11) }];
+        }
+        if (w.word === 'helper') {
+          // cross-file: point into B.kt (its model already exists)
+          return [{ uri: bModel.uri, range: new monaco.Range(1, 5, 1, 11) }];
+        }
+        return null;
+      }
+    });
+
+    // THE KEY OPTION: definitionLinkOpensInPeek is a top-level IEditorOptions boolean,
+    // NOT nested under gotoLocation. Apply directly to BOTH inner editors.
+    const OPTS = {
+      definitionLinkOpensInPeek: true,
+      gotoLocation: { multipleDefinitions: 'peek', multipleDeclarations: 'peek' }
+    };
+    diff.getModifiedEditor().updateOptions(OPTS);
+    diff.getOriginalEditor().updateOptions(OPTS);
+
+    const me = diff.getModifiedEditor();
+    window.__spike.modifiedEditor = me;
+
+    window.__spike.pageCoords = (lineNumber, column) => {
+      const p = me.getScrolledVisiblePosition({ lineNumber, column });
+      const rect = me.getDomNode().getBoundingClientRect();
+      return { x: rect.left + p.left + 2, y: rect.top + p.top + (p.height / 2) };
+    };
+
+    // Fallback path, wired but DISABLED by default.
+    me.onMouseUp((e) => {
+      if (!window.__spike.fallbackEnabled) return;
+      if (!(e.event.ctrlKey || e.event.metaKey) || !e.target.position) return;
+      me.setPosition(e.target.position);
+      me.trigger('spike', 'editor.action.peekDefinition', {});
+    });
+
+    window.__spike.triggerPeekAt = (lineNumber, column) => {
+      me.setPosition({ lineNumber, column });
+      me.trigger('spike', 'editor.action.peekDefinition', {});
+    };
+
+    window.__spike.ready = true;
+  });
+</script>
+</body>
+</html>

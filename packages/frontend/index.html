@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>CtrlClickDiff</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #1e1e1e;
+      }
+
+      /* Milestone 4 shell layout — sidebar (commit picker + changed-file
+         list) + diff pane, built by shell.ts's initShell(). */
+      #app.ccd-app {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        width: 100vw;
+        height: 100vh;
+        font: 13px/1.4 system-ui, sans-serif;
+        color: #ccc;
+      }
+
+      .ccd-sidebar {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        background: #181818;
+        border-right: 1px solid #333;
+        overflow: hidden;
+      }
+
+      .ccd-picker {
+        flex: 0 0 auto;
+        padding: 10px 12px;
+        border-bottom: 1px solid #333;
+      }
+
+      .ccd-label {
+        display: block;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #888;
+        margin-bottom: 4px;
+      }
+
+      .ccd-select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px 6px;
+        background: #252525;
+        color: #ddd;
+        border: 1px solid #3a3a3a;
+        border-radius: 4px;
+        font: inherit;
+      }
+
+      .ccd-status {
+        flex: 0 0 auto;
+        padding: 6px 12px;
+        min-height: 1em;
+        color: #888;
+        font-size: 12px;
+      }
+
+      .ccd-file-list {
+        flex: 1 1 auto;
+        margin: 0;
+        padding: 4px 0;
+        list-style: none;
+        overflow-y: auto;
+      }
+
+      .ccd-file-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 12px;
+        cursor: pointer;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
+      .ccd-file-row:hover {
+        background: #262626;
+      }
+
+      .ccd-file-row.active {
+        background: #04395e;
+        color: #fff;
+      }
+
+      .ccd-badge {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        font: 700 10px/1 ui-monospace, monospace;
+        color: #0d1117;
+      }
+
+      .ccd-badge-A { background: #3fb950; }
+      .ccd-badge-M { background: #d29922; }
+      .ccd-badge-D { background: #f85149; }
+
+      .ccd-file-path {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font: 12px ui-monospace, monospace;
+      }
+
+      .ccd-diff-pane {
+        min-width: 0;
+        min-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "@ctrlclickdiff/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "smoke": "tsx src/smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ctrlclickdiff/shared": "workspace:*",
+    "fastify": "^5.0.0",
+    "web-tree-sitter": "^0.26.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
