@@ -59,9 +59,32 @@ pnpm dev:frontend
 
 Open the Vite URL it prints (default http://localhost:5173).
 
-**Using it:** choose a commit from the picker → click a changed `.kt` file (badged `A`/`M`/`D`)
-→ **Ctrl+click** (Cmd on macOS) a symbol to peek its declaration, **Esc** to close, **F12** to
-jump to the declaration's file.
+**One repo, one branch, per run.** `REPO_ROOT` is read once when the backend boots and cached
+for the life of the process — there is no in-app repo or branch switcher. The commit picker
+lists the newest 100 commits of whatever `HEAD` is checked out in `REPO_ROOT` at that moment
+(`git log -n 100`, no `--all`, no ref filter). To review a different repo or a different
+branch:
+
+```bash
+# stop the backend (Ctrl+C, or kill the process — see note below), then:
+cd /path/to/repo && git checkout <branch>   # only if you need a different branch
+REPO_ROOT=/path/to/repo pnpm dev:backend    # restart, pointed at the new repo/branch
+```
+
+The frontend doesn't need restarting — it just proxies `/api` to whatever backend is running.
+One gotcha: killing the `pnpm dev:backend` process by its top-level PID doesn't always kill the
+underlying `tsx watch` server (pnpm wraps it in a process tree), which can leave the old backend
+still bound to port 5178 and silently serving the old repo. If a restart seems to not take
+effect, check `lsof -i :5178` and kill the actual listening PID.
+
+**Using it:** choose a commit from the picker (auto-selects the newest on load) → click a
+changed `.kt` file in the sidebar (badged `A`/`M`/`D`, shown as a flat list — full path is the
+row's hover tooltip, not truncated in the UI yet) → **Ctrl+click** (Cmd on macOS) a symbol to
+peek its declaration inline, **Esc** to close the peek, **F12** to jump to the declaration's
+file (opens in the same diff pane, side-by-side view only — no unified/inline diff mode yet).
+
+Planned UX work (repo/branch picker, resizable + tree-view sidebar, unified diff mode, etc.) is
+tracked in `TO-DOS.md`.
 
 ### Try it with the bundled fixture
 
@@ -99,4 +122,21 @@ m1-spike/           throwaway CDN spike that proved peek-in-diff before any real
 
 **In:** Kotlin, side-by-side diff, same-file + cross-file peek, name-based resolution, read-only.
 **Out:** other languages, semantic accuracy, unified/inline diff, staging/editing, auth/remote,
-desktop packaging, find-references/rename/hover. The `SymbolResolver` seam keeps these open.
+desktop packaging, find-references/rename/hover, repo/branch switching without a restart,
+resizable/tree-view sidebar. The `SymbolResolver` seam keeps the resolver swappable; see
+`TO-DOS.md` for the rest.
+
+### Read-only, mechanically
+
+"Read-only" isn't just a design intent — the code has no path to write or delete anything:
+
+- Every git call goes through one function (`packages/backend/src/git.ts`'s `run()`) using
+  `execFile('git', args, …)` with an **argument array**, never a shell string, so request input
+  can't inject shell commands. The only git subcommands ever invoked are `log`, `rev-parse`,
+  `diff-tree`, `ls-tree`, and `show` — all read-only plumbing. Nothing calls `checkout`,
+  `reset`, `clean`, `commit`, `push`, or any branch-mutating command.
+- The only filesystem calls in the backend are `readFile` (loading the Kotlin WASM grammar once
+  at boot) and `existsSync`. There is no `writeFile`, `unlink`, `rm`, `rename`, or `mkdir`
+  anywhere in `packages/backend` or `packages/shared`.
+- Monaco's diff editor is created with `readOnly: true` (`packages/frontend/src/diff.ts`), so
+  the UI itself can't be typed into either.
