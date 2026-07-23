@@ -144,10 +144,12 @@ async function selectCommit(sha: string): Promise<void> {
   files = result.files;
   activePath = '';
 
-  // Fire-and-forget: warms the tree-sitter index for this revision so the
-  // first Ctrl+click doesn't pay the parse cost inline. Does not block
-  // rendering the file list.
-  api.prewarm(headSha);
+  // Auto-prewarm is intentionally disabled: on large repos (e.g. Lets-Plot,
+  // ~2700 .kt files) eagerly indexing the whole revision on every commit
+  // select is expensive — and against a blobless partial clone it would
+  // trigger thousands of on-demand blob fetches. The resolver still builds
+  // its index lazily on the first Ctrl+click (/api/def) and caches it per
+  // revision. For small repos, re-enable with: api.prewarm(headSha);
 
   renderFileList(files);
 
