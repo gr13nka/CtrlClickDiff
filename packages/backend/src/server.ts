@@ -175,14 +175,33 @@ app.get<{ Querystring: { repo?: string } }>(
   },
 );
 
-// GET /api/commits?repo=<id> -> CommitInfo[]
-app.get<{ Querystring: { repo?: string } }>(
+/**
+ * Exactly the shapes `GET /api/branches` emits: `HEAD` (the synthetic
+ * detached-HEAD entry) or a full refname under `refs/heads` / `refs/remotes`.
+ *
+ * A whitelist, not a blacklist, and applied before the value reaches git's argv.
+ * It happens to exclude a leading `-`, which is the case that matters most (an
+ * argument like `--output=/tmp/x` would otherwise be an *option* to `git log`,
+ * not a revision), but the point is that nothing outside this shape gets through
+ * at all. `git.ts` re-checks and additionally brackets the rev with
+ * `--end-of-options` / `--`; see the comment on `listCommits`.
+ */
+const REF_PATTERN = '^(HEAD|refs/(heads|remotes)/[^ ]+)$';
+
+// GET /api/commits?repo=<id>&ref=<refname> -> CommitInfo[]
+//
+// `ref` is optional and defaults to HEAD, so callers that predate branch
+// selection — including the current frontend — keep working unchanged.
+app.get<{ Querystring: { repo?: string; ref?: string } }>(
   '/api/commits',
   {
     schema: {
       querystring: {
         type: 'object',
-        properties: { ...REPO_QUERY_PROPERTY },
+        properties: {
+          ref: { type: 'string', pattern: REF_PATTERN },
+          ...REPO_QUERY_PROPERTY,
+        },
       },
     },
   },
@@ -192,7 +211,7 @@ app.get<{ Querystring: { repo?: string } }>(
       reply.code(root.status);
       return root.body;
     }
-    return listCommits(root.root);
+    return listCommits(root.root, request.query.ref);
   },
 );
 

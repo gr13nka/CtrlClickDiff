@@ -57,9 +57,38 @@ export async function revParseToplevel(dir: string): Promise<string> {
   return stdout.trim();
 }
 
-/** `git log --format=%H%x00%s%x00%an -n 100`, split on NUL per record. */
-export async function listCommits(repoRoot: string): Promise<CommitInfo[]> {
-  const stdout = await run(repoRoot, ['log', '--format=%H%x00%s%x00%an', '-n', '100']);
+/**
+ * `git log --format=%H%x00%s%x00%an -n 100 <ref>`, split on NUL per record.
+ *
+ * `ref` defaults to `HEAD` so callers that predate branch selection are
+ * unaffected. It is expected to be a full refname from `listBranches()`, and is
+ * fenced off three ways *in addition to* the route's schema whitelist. The
+ * redundancy is deliberate: `run()` uses execFile, so there is no shell to
+ * inject into, but `ref` still lands in git's own argv where git — not a shell —
+ * is the thing that can be talked into doing something else.
+ *
+ *   1. A leading `-` is rejected here rather than only at the route, so a future
+ *      caller that reaches this function by some other path (a CLI, a test, a
+ *      new endpoint) cannot pass `--output=/tmp/x` and have git write a file.
+ *   2. `--end-of-options` is the airtight form of the same rule: everything
+ *      after it is a revision or path, never an option, whatever it starts with.
+ *   3. The trailing `--` closes the other end. Without it, a ref whose name also
+ *      matches a file in the tree is ambiguous, and git may read the argument as
+ *      a pathspec — silently logging that file's history instead of the branch.
+ */
+export async function listCommits(repoRoot: string, ref = 'HEAD'): Promise<CommitInfo[]> {
+  if (ref.startsWith('-')) {
+    throw new Error(`refusing to treat an option-like ref as a revision: ${ref}`);
+  }
+  const stdout = await run(repoRoot, [
+    'log',
+    '--format=%H%x00%s%x00%an',
+    '-n',
+    '100',
+    '--end-of-options',
+    ref,
+    '--',
+  ]);
   const commits: CommitInfo[] = [];
   for (const line of stdout.split('\n')) {
     if (!line) continue; // trailing newline from git log
