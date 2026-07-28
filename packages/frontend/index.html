@@ -109,7 +109,13 @@
       .ccd-badge-M { background: #d29922; }
       .ccd-badge-D { background: #f85149; }
 
+      /* min-width:0 is what makes the ellipsis actually render: as a flex item
+         this defaults to min-width:auto, which refuses to shrink below its
+         content width, so text-overflow never fires and the row's
+         overflow:hidden just clips the path mid-glyph instead. */
       .ccd-file-path {
+        flex: 1 1 auto;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         font: 12px ui-monospace, monospace;
