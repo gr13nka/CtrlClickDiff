@@ -128,7 +128,7 @@ app.get<{ Querystring: { name: string; file: string; line: number; lang: 'kotlin
   async (request): Promise<DefLocation[]> => {
     const { name, file, line, lang, rev } = request.query;
     await resolver.buildIndex(getRepoRoot(), rev);
-    return resolver.resolve({ name, file, line, lang });
+    return resolver.resolve(getRepoRoot(), rev, { name, file, line, lang });
   },
 );
 
@@ -151,7 +151,7 @@ app.post<{ Querystring: { rev: string } }>(
   async (request): Promise<{ ok: true; count: number }> => {
     const { rev } = request.query;
     await resolver.buildIndex(getRepoRoot(), rev);
-    return { ok: true, count: resolver.indexedCount(rev) };
+    return { ok: true, count: resolver.indexedCount(getRepoRoot(), rev) };
   },
 );
 

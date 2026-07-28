@@ -7,10 +7,12 @@
 // first so a Ctrl+click near a locally-shadowing definition doesn't jump
 // across the repo before showing the local one.
 //
-// Indexing is per-revision and cached: buildIndex(repoRoot, rev) is a no-op
-// if `rev` was already indexed, so switching files in the M4 shell never
-// re-parses the tree. The most-recently-built revision is remembered as
-// "active" — resolve() always answers against it.
+// Indexing is per (repo, revision) and cached: buildIndex(repoRoot, rev) is a
+// no-op if that pair was already indexed, so switching files in the M4 shell
+// never re-parses the tree. resolve() is told which (repoRoot, rev) to answer
+// against on every call — the resolver has no notion of a "current" revision,
+// so two overlapping requests for different revisions cannot be served from
+// each other's index.
 
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
@@ -55,14 +57,29 @@ interface DefMatch {
   location: DefLocation;
 }
 
-/** Per-revision symbol table: definition name -> every location it's declared at. */
+/** One (repo, revision)'s symbol table: definition name -> every location it's declared at. */
 type Index = Map<string, DefLocation[]>;
+
+/**
+ * Cache key for `indexByRepoRevision`. The repo root is part of the key
+ * because a revision string is only unique *within* one repository — a branch
+ * name or an abbreviated sha names different commits in different repos, so
+ * keying on the revision alone would let one repo's index answer another
+ * repo's queries. `repoRoot` is already a canonical absolute path, so it
+ * identifies the repo without the resolver having to know how the HTTP layer
+ * names repositories.
+ *
+ * NUL is the separator because neither a filesystem path nor a git ref can
+ * contain one, so the two halves can never run together ambiguously.
+ */
+function indexKey(repoRoot: string, revision: string): string {
+  return `${repoRoot}\u0000${revision}`;
+}
 
 export class TreeSitterResolver implements SymbolResolver {
   private parser: Parser | undefined;
   private query: Query | undefined;
-  private readonly indexByRevision = new Map<string, Index>();
-  private activeRevision: string | undefined;
+  private readonly indexByRepoRevision = new Map<string, Index>();
 
   /**
    * `Parser.init()` -> `Language.load(wasmPath)` -> `new Query(lang, tagsScmSource)`.
@@ -89,16 +106,14 @@ export class TreeSitterResolver implements SymbolResolver {
 
   /**
    * List `.kt` files at `revision` (git ls-tree), `git show` + parse + query
-   * each, and build `Map<name, DefLocation[]>`. No-op if `revision` is
-   * already cached — but still marks it as the active revision, since a
-   * cache hit means "switch back to a rev we've already built", not
-   * "nothing to do".
+   * each, and build `Map<name, DefLocation[]>`. No-op if this
+   * (repoRoot, revision) pair is already cached — the built index stays put
+   * and later resolve() calls name the pair they want, so there is nothing to
+   * switch over.
    */
   async buildIndex(repoRoot: string, revision: string): Promise<void> {
-    if (this.indexByRevision.has(revision)) {
-      this.activeRevision = revision;
-      return;
-    }
+    const key = indexKey(repoRoot, revision);
+    if (this.indexByRepoRevision.has(key)) return;
     if (!this.parser || !this.query) {
       throw new Error('TreeSitterResolver.buildIndex: called before init()');
     }
@@ -124,20 +139,23 @@ export class TreeSitterResolver implements SymbolResolver {
       }
     }
 
-    this.indexByRevision.set(revision, index);
-    this.activeRevision = revision;
-    console.log(`[resolver] indexed ${revision} (${this.indexedCount(revision)} symbols)`);
+    this.indexByRepoRevision.set(key, index);
+    console.log(`[resolver] indexed ${revision} (${this.indexedCount(repoRoot, revision)} symbols)`);
   }
 
   /**
-   * Exact identifier match against the active revision's index. Empty array
-   * = not found (no such symbol, or its revision was never indexed).
+   * Exact identifier match against `revision`'s index in `repoRoot`. Empty
+   * array = not found (no such symbol, or that pair was never indexed).
    * Multiple hits are ranked same-file (`query.file`) first, then
    * cross-file — stable within each group.
+   *
+   * The pair to answer against is passed in rather than held as resolver
+   * state: a caller's `await buildIndex(...)` and its `resolve(...)` are two
+   * separate turns of the event loop, and anything remembered in between
+   * could have been overwritten by another in-flight request.
    */
-  async resolve(query: DefQuery): Promise<DefLocation[]> {
-    if (!this.activeRevision) return [];
-    const index = this.indexByRevision.get(this.activeRevision);
+  async resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]> {
+    const index = this.indexByRepoRevision.get(indexKey(repoRoot, revision));
     if (!index) return [];
 
     const locs = index.get(query.name);
@@ -151,12 +169,12 @@ export class TreeSitterResolver implements SymbolResolver {
   }
 
   /**
-   * Total DefLocation count indexed for `revision` (0 if never built) — not
-   * part of SymbolResolver; used by POST /api/index's `{ ok, count }`
-   * prewarm response (M4).
+   * Total DefLocation count indexed for `revision` in `repoRoot` (0 if never
+   * built) — not part of SymbolResolver; used by POST /api/index's
+   * `{ ok, count }` prewarm response (M4).
    */
-  indexedCount(revision: string): number {
-    const index = this.indexByRevision.get(revision);
+  indexedCount(repoRoot: string, revision: string): number {
+    const index = this.indexByRepoRevision.get(indexKey(repoRoot, revision));
     if (!index) return 0;
     let count = 0;
     for (const locs of index.values()) count += locs.length;

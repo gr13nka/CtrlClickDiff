@@ -16,5 +16,5 @@ export interface DefLocation {
 
 export interface SymbolResolver {
   buildIndex(repoRoot: string, revision: string): Promise<void>;
-  resolve(query: DefQuery): Promise<DefLocation[]>;
+  resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]>;
 }
