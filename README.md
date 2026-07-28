@@ -117,6 +117,7 @@ m1-spike/           throwaway CDN spike that proved peek-in-diff before any real
 | `GET /api/file?rev=&path=` | file content at a revision (`""` for the missing side of added/deleted files) |
 | `GET /api/def?name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found; multiple = ambiguous) |
 | `POST /api/index?rev=` | prewarm the symbol index for a revision |
+| `GET /api/browse?path=` | subdirectories of `path` (default: the browse root) — directory names only |
 
 ## Scope (MVP)
 
@@ -135,8 +136,21 @@ resizable/tree-view sidebar. The `SymbolResolver` seam keeps the resolver swappa
   can't inject shell commands. The only git subcommands ever invoked are `log`, `rev-parse`,
   `diff-tree`, `ls-tree`, and `show` — all read-only plumbing. Nothing calls `checkout`,
   `reset`, `clean`, `commit`, `push`, or any branch-mutating command.
-- The only filesystem calls in the backend are `readFile` (loading the Kotlin WASM grammar once
-  at boot) and `existsSync`. There is no `writeFile`, `unlink`, `rm`, `rename`, or `mkdir`
-  anywhere in `packages/backend` or `packages/shared`.
+- The backend reads the filesystem and never writes it. Its whole filesystem surface is
+  `readFile` (the Kotlin WASM grammar + `tags.scm`, once at boot), `realpath`/`stat` to validate
+  a path being registered as a repo, `readdir` to list directories for the repo picker, and
+  `existsSync`. There is no `writeFile`, `unlink`, `rm`, `rename`, or `mkdir` anywhere in
+  `packages/backend` or `packages/shared`.
+- That directory listing (`GET /api/browse`, `packages/backend/src/browse.ts`) is confined to a
+  **browse root** — `CCD_BROWSE_ROOT`, defaulting to `$HOME` — and returns **directory names
+  only**. Never file names, never file contents, sizes, or timestamps; entries starting with `.`
+  are skipped, and symlinked directories are excluded outright so a listing can't dangle a path
+  out of the sandbox. The requested path and the root are both `realpath`'d *before* they are
+  compared, which is what stops a symlink from escaping the root.
+- `POST /api/repos` is the only way a browser can choose which directory git runs in, and it
+  applies the same containment check — after canonicalizing the path to its repository toplevel
+  via `git rev-parse --show-toplevel`, so an allowed-looking subdirectory of a repo that lives
+  outside the browse root is rejected too. `REPO_ROOT` bypasses this check by design: it is
+  supplied by whoever starts the process, not by the browser.
 - Monaco's diff editor is created with `readOnly: true` (`packages/frontend/src/diff.ts`), so
   the UI itself can't be typed into either.

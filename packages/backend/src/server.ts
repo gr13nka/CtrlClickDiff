@@ -16,6 +16,7 @@ import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import type { ChangedFile, CommitFiles, CommitInfo, DefLocation } from '@ctrlclickdiff/shared';
+import { BrowsePathError, browseDirectory, type BrowseListing } from './browse';
 import { changedKtFiles, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
@@ -79,6 +80,32 @@ app.post<{ Body: { path: string } }>(
 app.get('/api/repos', async () => {
   return { repos: repos.list(), defaultRepoId: repos.defaultRepoId, browseRoot };
 });
+
+// GET /api/browse?path=<abs> -> subdirectories of `path` (default: the browse
+// root), so the user can find a checkout to POST to /api/repos. Directory names
+// only — see browse.ts for what this deliberately does not return.
+app.get<{ Querystring: { path?: string } }>(
+  '/api/browse',
+  {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+        },
+      },
+    },
+  },
+  async (request, reply): Promise<BrowseListing | { error: string }> => {
+    try {
+      return await browseDirectory(browseRoot, request.query.path);
+    } catch (err) {
+      if (!(err instanceof BrowsePathError)) throw err;
+      reply.code(400);
+      return { error: err.message };
+    }
+  },
+);
 
 /**
  * `?repo=` is OPTIONAL on every data route, falling back to the REPO_ROOT repo.
