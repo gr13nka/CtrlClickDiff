@@ -37,6 +37,10 @@
         --ccd-sidebar-w: 300px;
         --ccd-sidebar-w-min: 220px;
         --ccd-sidebar-w-max: 640px;
+        /* Horizontal step per level of file-tree nesting. Deliberately smaller
+           than the 12px gutter: at the 220px minimum sidebar width a depth-4
+           row has to give the indent back to the filename. */
+        --ccd-tree-indent: 10px;
       }
 
       html, body {
@@ -109,23 +113,82 @@
         overflow-y: auto;
       }
 
-      .ccd-file-row {
+      /* Nested list holding one directory's children. Zero padding of its own:
+         indentation is the rows' business (see --ccd-depth below), because the
+         UA's per-<ul> padding compounds and a Kotlin package path is four or
+         five levels deep — enough to push the filename off a 220px sidebar
+         before it has been read. */
+      .ccd-subtree {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      /* Explicit, because the rule above would otherwise be free to out-rank
+         the UA's `[hidden] { display: none }` and leave a collapsed directory
+         showing its children. */
+      .ccd-subtree[hidden] {
+        display: none;
+      }
+
+      /* The two row kinds share one box so a directory and a file at the same
+         depth line up. --ccd-depth is set per row by shell.ts; the longhand
+         after the shorthand is what turns it into an indent. */
+      .ccd-file-row,
+      .ccd-dir-row {
         display: flex;
         align-items: center;
         gap: 8px;
         padding: 4px 12px;
+        padding-left: calc(12px + var(--ccd-depth, 0) * var(--ccd-tree-indent));
         cursor: pointer;
         white-space: nowrap;
         overflow: hidden;
       }
 
-      .ccd-file-row:hover {
+      .ccd-file-row:hover,
+      .ccd-dir-row:hover {
         background: var(--ccd-canvas-subtle);
       }
 
       .ccd-file-row.active {
         background: var(--ccd-accent-bg);
         color: var(--ccd-accent-fg);
+      }
+
+      .ccd-dir-row:focus-visible {
+        outline: 1px solid var(--ccd-fg-muted);
+        outline-offset: -1px;
+      }
+
+      /* One glyph that rotates, rather than two glyphs swapped by JS: the only
+         thing shell.ts writes on toggle is aria-expanded, so the arrow cannot
+         disagree with the state a screen reader is told. */
+      .ccd-twisty {
+        flex: 0 0 auto;
+        /* Matches .ccd-badge's width so a directory label and a file label at
+           the same depth start at the same x. */
+        width: 16px;
+        text-align: center;
+        color: var(--ccd-fg-muted);
+        transition: transform 80ms ease;
+      }
+
+      .ccd-dir-row[aria-expanded='true'] .ccd-twisty {
+        transform: rotate(90deg);
+      }
+
+      /* Same min-width:0 story as .ccd-file-path below, and it matters more
+         here: a collapsed chain label is a whole path prefix
+         ('src/main/kotlin/org/example') and is long by construction, so it must
+         ellipsise rather than push the row wide. */
+      .ccd-dir-name {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font: 12px ui-monospace, monospace;
+        color: var(--ccd-fg-emphasis);
       }
 
       .ccd-badge {

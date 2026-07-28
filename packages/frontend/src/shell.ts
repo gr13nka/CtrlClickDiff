@@ -11,6 +11,7 @@
 import type { ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { initDiff, createDiff } from './diff';
+import { buildFileTree, type TreeNode } from './filetree';
 
 // Current commit's resolved state. Empty until the first commit loads.
 let headSha = '';
@@ -226,36 +227,153 @@ async function selectCommit(sha: string): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Changed-file tree
+//
+// The shape is filetree.ts's job; everything below is the rendering of it.
+// ---------------------------------------------------------------------------
+
+type DirNode = Extract<TreeNode, { kind: 'dir' }>;
+type FileNode = Extract<TreeNode, { kind: 'file' }>;
+
+// Directories the reviewer has explicitly collapsed, by TreeNode.path.
+// Absence means expanded, so a directory nobody has touched — which is every
+// directory of every commit at boot — renders open.
+//
+// Expanded-by-default is a correctness decision, not a taste one: this is a
+// review tool, and a collapsed directory hides a changed file. A file the
+// reviewer never saw is a file the reviewer never reviewed, so the default
+// must never be "some of this commit is off-screen".
+//
+// The same reasoning is why this is deliberately NOT persisted to
+// localStorage, unlike the sidebar width a few hundred lines below. A width is
+// a once-per-install preference and is wrong at worst; a collapse remembered
+// from last week would silently hide today's changed file from today's review.
+// Session-scoped is the most this may safely be.
+const collapsedDirs = new Set<string>();
+
+/**
+ * Forgets every collapse. For a repo switch, where the retained paths would
+ * describe a tree that no longer exists — nothing calls this yet.
+ */
+export function resetFileTreeState(): void {
+  collapsedDirs.clear();
+}
+
 function renderFileList(changedFiles: ChangedFile[]): void {
   if (!fileListEl) return;
   fileListEl.innerHTML = '';
   rowsByPath.clear();
 
-  for (const file of changedFiles) {
-    const row = document.createElement('li');
-    row.className = 'ccd-file-row';
-    row.title = file.path;
-
-    const badge = document.createElement('span');
-    badge.className = `ccd-badge ccd-badge-${file.status}`;
-    badge.textContent = file.status;
-
-    const pathEl = document.createElement('span');
-    pathEl.className = 'ccd-file-path';
-    pathEl.textContent = file.path;
-
-    row.append(badge, pathEl);
-    row.addEventListener('click', () => {
-      openFile(file.path).catch((err: unknown) => {
-        setStatus(`Error loading diff: ${errorMessage(err)}`);
-      });
-    });
-
-    fileListEl.appendChild(row);
-    rowsByPath.set(file.path, row);
-  }
+  appendNodes(fileListEl, buildFileTree(changedFiles), 0);
 
   highlightActiveRow();
+}
+
+/** Appends `nodes` to `listEl` as rows nested `depth` levels deep. */
+function appendNodes(listEl: HTMLUListElement, nodes: TreeNode[], depth: number): void {
+  for (const node of nodes) {
+    listEl.append(node.kind === 'dir' ? dirItem(node, depth) : fileRow(node, depth));
+  }
+}
+
+/**
+ * One directory: a clickable header row plus the (possibly hidden) <ul> of its
+ * children. Toggling flips exactly two things — the `collapsedDirs` entry and
+ * `aria-expanded` — and the twisty's rotation and the subtree's visibility both
+ * follow from CSS, so there is no second copy of "is this open" to drift.
+ */
+function dirItem(node: DirNode, depth: number): HTMLLIElement {
+  const item = document.createElement('li');
+  item.className = 'ccd-tree-dir';
+
+  const subtree = document.createElement('ul');
+  subtree.className = 'ccd-subtree';
+  appendNodes(subtree, node.children, depth + 1);
+
+  const row = document.createElement('div');
+  row.className = 'ccd-dir-row';
+  row.style.setProperty('--ccd-depth', String(depth));
+  row.title = node.path;
+  // The sidebar is the primary way around a commit, so the rows it is made of
+  // have to be reachable without a mouse. role=button rather than a full ARIA
+  // tree: this buys Enter/Space and a screen-reader-announced state for two
+  // attributes, where a tree would also owe roving tabindex and arrow-key
+  // navigation.
+  row.role = 'button';
+  row.tabIndex = 0;
+
+  const twisty = document.createElement('span');
+  twisty.className = 'ccd-twisty';
+  twisty.ariaHidden = 'true';
+  // Rotated a quarter turn by CSS when the row is expanded, so this glyph is
+  // the only one either state needs.
+  twisty.textContent = '▸';
+
+  const name = document.createElement('span');
+  name.className = 'ccd-dir-name';
+  // node.name is already a collapsed chain ('src/main/kotlin/org/example'),
+  // so it is a whole path prefix on one row, not one segment.
+  name.textContent = node.name;
+
+  const syncExpanded = (): void => {
+    const expanded = !collapsedDirs.has(node.path);
+    row.ariaExpanded = String(expanded);
+    subtree.hidden = !expanded;
+  };
+  const toggle = (): void => {
+    if (!collapsedDirs.delete(node.path)) collapsedDirs.add(node.path);
+    syncExpanded();
+  };
+
+  row.addEventListener('click', toggle);
+  row.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    // Space would scroll the file list out from under the row that was just
+    // toggled, which is the one thing the user was looking at.
+    e.preventDefault();
+    toggle();
+  });
+
+  syncExpanded();
+  row.append(twisty, name);
+  item.append(row, subtree);
+  return item;
+}
+
+/**
+ * One file: the same row the flat list rendered, with two differences — the
+ * label is the basename and the indent comes from `depth`.
+ *
+ * Registers into `rowsByPath` under the *full* path, exactly as before. That
+ * is what lets highlightActiveRow() and defprovider.ts's cross-file F12 jump —
+ * both of which only ever know a full path — survive the tree untouched.
+ */
+function fileRow(node: FileNode, depth: number): HTMLLIElement {
+  const row = document.createElement('li');
+  row.className = 'ccd-file-row';
+  row.style.setProperty('--ccd-depth', String(depth));
+  // Still the full path, not the shortened label: the tooltip is where the
+  // path the row no longer spells out comes back.
+  row.title = node.path;
+
+  const badge = document.createElement('span');
+  badge.className = `ccd-badge ccd-badge-${node.status}`;
+  badge.textContent = node.status;
+
+  const pathEl = document.createElement('span');
+  pathEl.className = 'ccd-file-path';
+  pathEl.textContent = node.name;
+
+  row.append(badge, pathEl);
+  row.addEventListener('click', () => {
+    openFile(node.path).catch((err: unknown) => {
+      setStatus(`Error loading diff: ${errorMessage(err)}`);
+    });
+  });
+
+  rowsByPath.set(node.path, row);
+  return row;
 }
 
 function highlightActiveRow(): void {
