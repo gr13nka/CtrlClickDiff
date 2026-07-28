@@ -14,6 +14,15 @@ export interface CommitInfo {
   sha: string;
   subject: string;
   author: string;
+  /**
+   * Author date, ISO-8601 with offset (git's `%aI`), e.g.
+   * `2026-07-28T14:03:11+03:00`.
+   *
+   * The *author* date, not the committer date: it is the one a reviewer
+   * recognizes as "when this change was written", and it survives the rebases
+   * and cherry-picks that reset the committer date to now.
+   */
+  date: string;
 }
 
 /**

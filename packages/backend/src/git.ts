@@ -58,7 +58,7 @@ export async function revParseToplevel(dir: string): Promise<string> {
 }
 
 /**
- * `git log --format=%H%x00%s%x00%an -n 100 <ref>`, split on NUL per record.
+ * `git log --format=%H%x00%s%x00%an%x00%aI -n 100 <ref>`, split on NUL per record.
  *
  * `ref` defaults to `HEAD` so callers that predate branch selection are
  * unaffected. It is expected to be a full refname from `listBranches()`, and is
@@ -82,7 +82,7 @@ export async function listCommits(repoRoot: string, ref = 'HEAD'): Promise<Commi
   }
   const stdout = await run(repoRoot, [
     'log',
-    '--format=%H%x00%s%x00%an',
+    '--format=%H%x00%s%x00%an%x00%aI',
     '-n',
     '100',
     '--end-of-options',
@@ -92,8 +92,8 @@ export async function listCommits(repoRoot: string, ref = 'HEAD'): Promise<Commi
   const commits: CommitInfo[] = [];
   for (const line of stdout.split('\n')) {
     if (!line) continue; // trailing newline from git log
-    const [sha, subject, author] = line.split('\x00');
-    commits.push({ sha, subject: subject ?? '', author: author ?? '' });
+    const [sha, subject, author, date] = line.split('\x00');
+    commits.push({ sha, subject: subject ?? '', author: author ?? '', date: date ?? '' });
   }
   return commits;
 }
