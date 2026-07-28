@@ -2,8 +2,9 @@
 // proven pattern (definitionLinkOpensInPeek + gotoLocation applied directly to
 // both inner editors, not trusted to propagate from createDiffEditor's options)
 // and the M2 plan's model-building approach: models are keyed by
-// file:///<sha>/<path> so they never collide across revisions, and reused
-// rather than recreated when a path/rev pair repeats (e.g. re-picking a file).
+// file://<repoId>/<sha>/<path> (see modelUri) so they never collide across
+// repositories or revisions, and reused rather than recreated when a
+// repo/rev/path triple repeats (e.g. re-picking a file).
 
 import * as monaco from 'monaco-editor';
 import { api } from './api';
@@ -52,6 +53,29 @@ export function getOrCreateModel(uriString: string, src: string, language: strin
 }
 
 /**
+ * The one place that knows a model URI's shape: `file://<repoId>/<rev>/<path>`.
+ * defprovider.ts's parseModelUri reads it back, and is the only other file
+ * allowed to care.
+ *
+ * The repo id goes in the URI's **authority**, not in the path, for two
+ * reasons that both come from Monaco:
+ *
+ *  - An authority cannot contain '/', which is exactly why the id is an opaque
+ *    slug-plus-hash rather than the repository's path. It also means `uri.path`
+ *    still holds precisely rev + path, so parsing stays what it was.
+ *  - Monaco LOWERCASES the authority in Uri.toString() (vs/base/common/uri.js:
+ *    546), and that string is what its model registry keys on. An id with an
+ *    uppercase character would be stored under one key and looked up under
+ *    another, and the model would silently fail to round-trip — cross-file peek
+ *    would just stop rendering, with nothing to show for it. The backend
+ *    guarantees ids match /^[a-z0-9][a-z0-9-]*$/ (see repos.ts's repoId), which
+ *    is what makes this safe; it is a contract, not a coincidence.
+ */
+export function modelUri(repoId: string, rev: string, path: string): string {
+  return `file://${repoId}/${rev}/${path}`;
+}
+
+/**
  * Returns the modified (right-hand, "head") pane's editor instance, or null
  * before initDiff() has run. Exists for main.ts's window.__ccd debug hook, so
  * the M3 verify harness can do coordinate math against the live editor.
@@ -76,19 +100,27 @@ let diffEpoch = 0;
  *
  * Superseded calls return without touching the editor.
  */
-export async function createDiff(headSha: string, baseSha: string, path: string): Promise<void> {
+export async function createDiff(
+  repoId: string,
+  headSha: string,
+  baseSha: string,
+  path: string
+): Promise<void> {
   if (!diffEditor) {
     throw new Error('createDiff: call initDiff(el) before createDiff()');
   }
 
   const e = ++diffEpoch;
-  const [baseSrc, headSrc] = await Promise.all([api.file(baseSha, path), api.file(headSha, path)]);
+  const [baseSrc, headSrc] = await Promise.all([
+    api.file(repoId, baseSha, path),
+    api.file(repoId, headSha, path)
+  ]);
   // Also skips building the models: a superseded call's models would only be
   // reachable if that path were opened again, which recreates them anyway.
   if (e !== diffEpoch) return;
 
-  const original = getOrCreateModel(`file:///${baseSha}/${path}`, baseSrc, 'kotlin');
-  const modified = getOrCreateModel(`file:///${headSha}/${path}`, headSrc, 'kotlin');
+  const original = getOrCreateModel(modelUri(repoId, baseSha, path), baseSrc, 'kotlin');
+  const modified = getOrCreateModel(modelUri(repoId, headSha, path), headSrc, 'kotlin');
 
   diffEditor.setModel({ original, modified });
 }

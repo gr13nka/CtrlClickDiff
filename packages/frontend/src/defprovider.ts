@@ -15,32 +15,37 @@
 //     diff.ts's getOrCreateModel, never a blind createModel) before we
 //     hand back the Location[].
 //
-// Model URIs are file:///<rev>/<path> (see diff.ts). `path` may itself
-// contain '/', so parsing takes the first path segment as `rev` and
-// rejoins the remainder as `path`.
+// Model URIs are file://<repoId>/<rev>/<path> (built by diff.ts's modelUri,
+// which explains why the repo id lives in the authority). The model the user
+// clicked in is therefore the only thing this file needs to know *which*
+// repository to resolve against — there is no ambient "current repo" here, and
+// deliberately so: a resolution belongs to the model it started from.
+// `path` may itself contain '/', so parsing takes the first path segment as
+// `rev` and rejoins the remainder as `path`.
 
 import * as monaco from 'monaco-editor';
 import type { DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
-import { getOrCreateModel, revealLine } from './diff';
+import { getOrCreateModel, modelUri, revealLine } from './diff';
 
-function parseModelUri(uri: monaco.Uri): { rev: string; path: string } {
+function parseModelUri(uri: monaco.Uri): { repoId: string; rev: string; path: string } {
   const segments = uri.path.replace(/^\/+/, '').split('/');
   const [rev = '', ...rest] = segments;
-  return { rev, path: rest.join('/') };
+  return { repoId: uri.authority, rev, path: rest.join('/') };
 }
 
-// Memoizes GET /api/file per "<rev>/<path>" so the two provideDefinition
-// calls per click (see file header, fact 1) never double-fetch, and so
-// repeatedly peeking the same cross-file target reuses one resolved fetch
-// instead of racing two.
+// Memoizes GET /api/file per "<repoId>/<rev>/<path>" so the two
+// provideDefinition calls per click (see file header, fact 1) never
+// double-fetch, and so repeatedly peeking the same cross-file target reuses one
+// resolved fetch instead of racing two. The repo id is part of the key for the
+// same reason it is part of the URI: a SHA alone does not identify a file.
 const fileCache = new Map<string, Promise<string>>();
 
-function memoizedFile(rev: string, path: string): Promise<string> {
-  const key = `${rev}/${path}`;
+function memoizedFile(repoId: string, rev: string, path: string): Promise<string> {
+  const key = `${repoId}/${rev}/${path}`;
   let pending = fileCache.get(key);
   if (!pending) {
-    pending = api.file(rev, path);
+    pending = api.file(repoId, rev, path);
     fileCache.set(key, pending);
   }
   return pending;
@@ -63,11 +68,11 @@ export function registerKotlinDefinitions(): void {
       const word = model.getWordAtPosition(position);
       if (!word) return null;
 
-      const { rev, path } = parseModelUri(model.uri);
+      const { repoId, rev, path } = parseModelUri(model.uri);
 
       let defs: DefLocation[];
       try {
-        defs = await api.def({ name: word.word, file: path, line: position.lineNumber, rev });
+        defs = await api.def({ repoId, name: word.word, file: path, line: position.lineNumber, rev });
       } catch (err) {
         // Network/server error is not a "no definition found" — but Monaco
         // has no distinct signal for the two, so log and degrade to "none".
@@ -77,11 +82,13 @@ export function registerKotlinDefinitions(): void {
 
       const locations: monaco.languages.Location[] = [];
       for (const loc of defs) {
-        const uriStr = `file:///${rev}/${loc.path}`;
+        // Same repo as the model the click started in: a definition never
+        // crosses repositories, so the id travels straight through.
+        const uriStr = modelUri(repoId, rev, loc.path);
         // REQUIRED for cross-file peek (see file header, fact 2): build the
         // target model before returning, from the *same* memoized fetch a
         // second provideDefinition call for this click would reuse.
-        getOrCreateModel(uriStr, await memoizedFile(rev, loc.path), 'kotlin');
+        getOrCreateModel(uriStr, await memoizedFile(repoId, rev, loc.path), 'kotlin');
         locations.push({
           uri: monaco.Uri.parse(uriStr),
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)

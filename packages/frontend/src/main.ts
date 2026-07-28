@@ -2,7 +2,7 @@ import './monaco-env';
 import type * as monaco from 'monaco-editor';
 import { getModifiedEditor } from './diff';
 import { registerKotlinDefinitions } from './defprovider';
-import { initShell, openFile, getHeadSha, getBaseSha } from './shell';
+import { initShell, openFile, getHeadSha, getBaseSha, getRepoId } from './shell';
 
 // Milestone 4: replaces the M3 auto-load-first-file boot with the real
 // commit picker + changed-file switcher (shell.ts). All app state (current
@@ -20,6 +20,8 @@ import { initShell, openFile, getHeadSha, getBaseSha } from './shell';
 // path (highlighting, model creation, everything).
 interface CcdDebugHook {
   openPath(path: string): Promise<void>;
+  /** '' until the shell has resolved a repository. Also the model URIs' authority. */
+  readonly repoId: string;
   readonly headSha: string;
   readonly baseSha: string;
   readonly modifiedEditor: monaco.editor.IStandaloneCodeEditor | null;
@@ -39,6 +41,9 @@ registerKotlinDefinitions();
 
 window.__ccd = {
   openPath: openFile,
+  get repoId() {
+    return getRepoId();
+  },
   get headSha() {
     return getHeadSha();
   },

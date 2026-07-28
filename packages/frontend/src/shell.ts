@@ -9,9 +9,19 @@
 // highlighting/loading path.
 
 import type { ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
-import { api } from './api';
+import { api, type RepoEntry } from './api';
 import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
+
+// The repository every request below is scoped to. Null only before boot()
+// has resolved one — there is no "no repo" state the UI can reach afterwards.
+//
+// The whole entry is kept, not just the id, because the *path* is what
+// survives a backend restart: ids are handed out by an in-memory registry,
+// paths are what re-create them (POST /api/repos is idempotent). api.ts uses
+// that for its own 409 recovery; here it is what a repo can be re-selected by
+// on a later boot.
+let repo: RepoEntry | null = null;
 
 // Current commit's resolved state. Empty until the first commit loads.
 let headSha = '';
@@ -46,6 +56,21 @@ function stale(e: number): boolean {
 let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
+
+export function getRepoId(): string {
+  return repo?.id ?? '';
+}
+
+/**
+ * The current repo's id, for the code paths that cannot run before boot() has
+ * picked one. Throws rather than falling back to the backend's default repo:
+ * a request that quietly went to a different repository than the sidebar shows
+ * is a wrong answer, and a wrong answer is worse than a visible error.
+ */
+function requireRepoId(): string {
+  if (!repo) throw new Error('shell: no repository selected yet');
+  return repo.id;
+}
 
 export function getHeadSha(): string {
   return headSha;
@@ -109,7 +134,40 @@ export function initShell(rootEl: HTMLElement): void {
 
   initDiff(diffPane);
 
-  void loadCommits(select);
+  void boot(select);
+}
+
+/**
+ * Resolves which repository this session works against, then loads its commits.
+ *
+ * The backend serves many repos and names none of them implicitly, so the id
+ * has to come from somewhere before the first request: `GET /api/repos` reports
+ * the boot REPO_ROOT as `defaultRepoId`, which is what keeps single-repo
+ * behaviour identical to before this existed — start the backend with
+ * REPO_ROOT, get that repo.
+ */
+async function boot(select: HTMLSelectElement): Promise<void> {
+  const e = beginEpoch();
+  setStatus('Loading repository…');
+
+  let listing;
+  try {
+    listing = await api.repos();
+  } catch (err) {
+    if (stale(e)) return;
+    setStatus(`Error loading repositories: ${errorMessage(err)}`);
+    return;
+  }
+  if (stale(e)) return;
+
+  const entry = listing.repos.find((r) => r.id === listing.defaultRepoId);
+  if (!entry) {
+    setStatus('No repository configured. Start the backend with REPO_ROOT set.');
+    return;
+  }
+
+  repo = entry;
+  await loadCommits(select);
 }
 
 /**
@@ -133,7 +191,7 @@ export async function openFile(path: string): Promise<void> {
   activePath = path;
   highlightActiveRow();
   try {
-    await createDiff(headSha, baseSha, path);
+    await createDiff(requireRepoId(), headSha, baseSha, path);
   } catch (err) {
     // Superseded while the diff was loading: this failure is no longer the
     // one the user is waiting on, and every caller turns a throw into a
@@ -149,7 +207,7 @@ async function loadCommits(select: HTMLSelectElement): Promise<void> {
   setStatus('Loading commits…');
   let commits: CommitInfo[];
   try {
-    commits = await api.commits();
+    commits = await api.commits(requireRepoId());
   } catch (err) {
     if (stale(e)) return;
     setStatus(`Error loading commits: ${errorMessage(err)}`);
@@ -179,16 +237,15 @@ async function loadCommits(select: HTMLSelectElement): Promise<void> {
 }
 
 /**
- * Resolves `sha` -> { headSha, baseSha, files }, prewarms the resolver
- * index for headSha (fire-and-forget — see api.prewarm), renders the
- * changed-file list, and auto-opens the first non-deleted file.
+ * Resolves `sha` -> { headSha, baseSha, files }, renders the changed-file
+ * list, and auto-opens the first non-deleted file.
  */
 async function selectCommit(sha: string): Promise<void> {
   const e = beginEpoch();
   setStatus('Loading commit…');
   let result: CommitFiles;
   try {
-    result = await api.commitFiles(sha);
+    result = await api.commitFiles(requireRepoId(), sha);
   } catch (err) {
     if (stale(e)) return;
     setStatus(`Error loading commit: ${errorMessage(err)}`);
@@ -206,7 +263,9 @@ async function selectCommit(sha: string): Promise<void> {
   // select is expensive — and against a blobless partial clone it would
   // trigger thousands of on-demand blob fetches. The resolver still builds
   // its index lazily on the first Ctrl+click (/api/def) and caches it per
-  // revision. For small repos, re-enable with: api.prewarm(headSha);
+  // revision. For small repos, re-enable with a fire-and-forget
+  // POST /api/index?rev=<headSha>&repo=<id> — the api.prewarm() wrapper that
+  // used to sit here went with the call it existed for.
 
   renderFileList(files);
 
