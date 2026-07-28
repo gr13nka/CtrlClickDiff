@@ -8,7 +8,7 @@
 // F12 jump and a manual sidebar click behave identically and share one
 // highlighting/loading path.
 
-import type { ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
+import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
 import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
@@ -23,6 +23,16 @@ import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './rep
 // that for its own 409 recovery; here it is what a repo can be re-selected by
 // on a later boot.
 let repo: RepoEntry | null = null;
+
+// The ref the commit picker is currently listing, as a **full** refname
+// ('refs/heads/main'). Empty only before the first branch load; after that it
+// is whatever the branch <select> shows, and every api.commits() call names it.
+//
+// The full refname and not the display name, because the display name does not
+// identify a ref: a local branch may be called `origin/main`, which renders
+// exactly as the remote-tracking `refs/remotes/origin/main` does. Only one of
+// those two is the one the user picked, and only the full form says which.
+let selectedRef = '';
 
 // Current commit's resolved state. Empty until the first commit loads.
 let headSha = '';
@@ -58,6 +68,7 @@ let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 let repoButtonEl: HTMLButtonElement | null = null;
 let repoNameEl: HTMLElement | null = null;
+let branchSelectEl: HTMLSelectElement | null = null;
 let commitSelectEl: HTMLSelectElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
 
@@ -119,6 +130,27 @@ export function initShell(rootEl: HTMLElement): void {
   renderRepoBar();
   repoBar.append(repoButton);
 
+  // Above the commit picker for the same reason the repo bar is above both: it
+  // scopes it. The commits below are this ref's, and a reader who misses that
+  // reads a history the sidebar never claimed to be showing.
+  const branchPicker = document.createElement('div');
+  branchPicker.className = 'ccd-picker';
+
+  const branchLabel = document.createElement('label');
+  branchLabel.className = 'ccd-label';
+  branchLabel.htmlFor = 'ccd-branch-select';
+  branchLabel.textContent = 'Branch';
+
+  const branchSelect = document.createElement('select');
+  branchSelect.id = 'ccd-branch-select';
+  branchSelect.className = 'ccd-select';
+  branchSelect.addEventListener('change', () => {
+    if (branchSelect.value) void selectBranch(branchSelect.value);
+  });
+  branchSelectEl = branchSelect;
+
+  branchPicker.append(branchLabel, branchSelect);
+
   const picker = document.createElement('div');
   picker.className = 'ccd-picker';
 
@@ -145,7 +177,7 @@ export function initShell(rootEl: HTMLElement): void {
   list.className = 'ccd-file-list';
   fileListEl = list;
 
-  sidebar.append(repoBar, picker, status, list);
+  sidebar.append(repoBar, branchPicker, picker, status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
   // #app.ccd-app). The tooltip is the only place the double-click reset is
@@ -197,7 +229,7 @@ async function boot(): Promise<void> {
   }
 
   adoptRepo(entry);
-  await loadCommits();
+  await loadRepoRefs();
 }
 
 /**
@@ -262,7 +294,12 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
   rowsByPath.clear();
   if (fileListEl) fileListEl.innerHTML = '';
 
-  await loadCommits();
+  // Not carried over: a refname is only meaningful inside the repo that has it,
+  // and `refs/heads/main` naming a branch in both repos is a coincidence, not a
+  // reason to open the new repo on it. loadRepoRefs() picks the new repo's HEAD.
+  selectedRef = '';
+
+  await loadRepoRefs();
 }
 
 /**
@@ -311,11 +348,145 @@ export async function openFile(path: string): Promise<void> {
 }
 
 /**
- * Fills the commit picker from the current repo's log and opens its newest
- * commit. Reads the <select> from module state rather than taking it as an
- * argument: it is called from boot() and again from every repo switch, and a
- * caller that had to carry the element around would be carrying it only to
- * hand it straight back.
+ * Everything a newly-current repository needs listed: its branches, then the
+ * commits of whichever one HEAD is on.
+ *
+ * One function and not two calls at each site, because the order is an
+ * invariant rather than a convenience — `loadCommits()` names `selectedRef`,
+ * and only `loadBranches()` can establish it. Skipping the commit load when the
+ * branch load failed is the same invariant seen from the other side: there is no
+ * ref to ask for.
+ */
+async function loadRepoRefs(): Promise<void> {
+  if (await loadBranches()) await loadCommits();
+}
+
+/**
+ * Fills the branch picker from the current repo and selects HEAD's branch.
+ * Returns whether `selectedRef` now names something — false covers both a
+ * failed load and a repo with no branches at all, and in either case the caller
+ * must not go on to list commits.
+ */
+async function loadBranches(): Promise<boolean> {
+  const select = branchSelectEl;
+  if (!select) return false;
+
+  const e = beginEpoch();
+  setStatus('Loading branches…');
+  let branches: BranchInfo[];
+  try {
+    branches = await api.branches(requireRepoId());
+  } catch (err) {
+    if (stale(e)) return false;
+    setStatus(`Error loading branches: ${errorMessage(err)}`);
+    return false;
+  }
+  if (stale(e)) return false;
+
+  // The backend guarantees an `isHead` entry for any repo that has a commit —
+  // a detached HEAD gets a synthetic one — so an empty list means an empty
+  // repository, with no ref to name and no commits to list under it.
+  const head = branches.find((b) => b.isHead);
+  renderBranchOptions(branches);
+  if (!head) {
+    setStatus('No branches found in repo.');
+    return false;
+  }
+
+  selectedRef = head.ref;
+  select.value = head.ref;
+  return true;
+}
+
+/**
+ * Repopulates the branch <select>: locals before remotes, each in its own
+ * <optgroup>, HEAD's branch first inside its group and the rest alphabetical.
+ *
+ * HEAD leads because it is the entry the user has a standing relationship with
+ * — it is what a fresh load selects, and it is where they will look to get back
+ * after scrolling through fifty remote branches. The rest are alphabetical
+ * because a branch list has no other order a reader can predict: sorting by tip
+ * date would rank them by relevance, but it would also reorder the list under
+ * the user's cursor every time a colleague pushed.
+ *
+ * Each option's value is the full refname and its text is the display name, per
+ * BranchInfo — see the note on `selectedRef` for why the two are not
+ * interchangeable.
+ */
+function renderBranchOptions(branches: BranchInfo[]): void {
+  const select = branchSelectEl;
+  if (!select) return;
+
+  // Repopulate, don't append — the same rule loadCommits() follows below, and
+  // for the same reason: this runs again on every repo switch.
+  select.innerHTML = '';
+
+  for (const kind of ['local', 'remote'] as const) {
+    const group = branches.filter((b) => b.kind === kind).sort(byHeadThenName);
+    // A repo with no remote configured has no remote refs, and an empty
+    // <optgroup> still renders its label as an unselectable row.
+    if (group.length === 0) continue;
+
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = kind === 'local' ? 'Local' : 'Remote';
+    for (const branch of group) {
+      const opt = document.createElement('option');
+      opt.value = branch.ref;
+      opt.textContent = branch.name;
+      opt.title = branch.ref;
+      optgroup.appendChild(opt);
+    }
+    select.appendChild(optgroup);
+  }
+}
+
+function byHeadThenName(a: BranchInfo, b: BranchInfo): number {
+  if (a.isHead !== b.isHead) return a.isHead ? -1 : 1;
+  return a.name.localeCompare(b.name);
+}
+
+/**
+ * Points the commit picker at another ref and opens its newest commit.
+ *
+ * No epoch is claimed here: `loadCommits()` claims one before its first await,
+ * and nothing happens in between that a stale caller could corrupt. Flipping
+ * branches quickly therefore leaves one in-flight commit load per flip, of
+ * which only the last is not stale — and `selectedRef`, set synchronously by
+ * each change event, already agrees with the <select> the user is looking at.
+ */
+async function selectBranch(ref: string): Promise<void> {
+  if (ref === selectedRef) return;
+  selectedRef = ref;
+  await loadCommits();
+}
+
+/**
+ * `4221baf · 2024-01-03 · Add User.email…` — one commit as one <option>.
+ *
+ * The date is here because the branch picker put it here: two refs' logs can be
+ * months apart, and between two commits from different branches nothing else on
+ * the row says which is the newer. The calendar day only (CommitInfo.date is a
+ * full ISO-8601 timestamp), because the sidebar is 300px by default and can be
+ * dragged down to 220px, and a time of day would cost six characters the
+ * subject has better use for.
+ */
+function commitOptionLabel(commit: CommitInfo): string {
+  return `${commit.sha.slice(0, 7)} · ${commit.date.slice(0, 10)} · ${commit.subject}`;
+}
+
+/**
+ * Fills the commit picker from `selectedRef`'s log and opens its newest commit.
+ * Reads the <select> from module state rather than taking it as an argument: it
+ * is called from boot(), from every repo switch and from every branch switch,
+ * and a caller that had to carry the element around would be carrying it only
+ * to hand it straight back.
+ *
+ * `selectedRef` is required to be set (loadRepoRefs and selectBranch are the
+ * only callers, and both establish it). It is passed as-is rather than falling
+ * back to the route's HEAD default, because an empty ref then fails loudly as a
+ * 400 — where the fallback would quietly list HEAD's commits underneath a
+ * branch picker naming something else, which in a review tool is a wrong answer
+ * dressed as a right one.
  */
 async function loadCommits(): Promise<void> {
   const select = commitSelectEl;
@@ -325,7 +496,7 @@ async function loadCommits(): Promise<void> {
   setStatus('Loading commits…');
   let commits: CommitInfo[];
   try {
-    commits = await api.commits(requireRepoId());
+    commits = await api.commits(requireRepoId(), selectedRef);
   } catch (err) {
     if (stale(e)) return;
     setStatus(`Error loading commits: ${errorMessage(err)}`);
@@ -333,17 +504,21 @@ async function loadCommits(): Promise<void> {
   }
   if (stale(e)) return;
   if (commits.length === 0) {
-    setStatus('No commits found in repo.');
+    setStatus('No commits found on this branch.');
     return;
   }
 
-  // Repopulate, don't append: every repo switch calls this again, and
-  // appending would stack the new repo's log under the old repo's.
+  // Repopulate, don't append: every repo switch and every branch switch calls
+  // this again, and appending would stack this ref's log under the last one's.
   select.innerHTML = '';
   for (const commit of commits) {
     const opt = document.createElement('option');
     opt.value = commit.sha;
-    opt.textContent = `${commit.sha.slice(0, 7)} ${commit.subject}`;
+    opt.textContent = commitOptionLabel(commit);
+    // A <select> clips its text rather than wrapping it, and what gets clipped
+    // is the subject — the one part of the row that is not recoverable from
+    // anywhere else on screen.
+    opt.title = opt.textContent;
     select.appendChild(opt);
   }
 

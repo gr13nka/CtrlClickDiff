@@ -8,7 +8,7 @@
 // `repo=` parameter, all repo-scoped requests funnel through repoFetch() below,
 // which appends it — and which owns the restart recovery described there.
 
-import type { CommitInfo, CommitFiles, DefLocation } from '@ctrlclickdiff/shared';
+import type { BranchInfo, CommitInfo, CommitFiles, DefLocation } from '@ctrlclickdiff/shared';
 
 // Mirrors of backend repos.ts's RepoEntry and browse.ts's BrowseListing /
 // BrowseEntry. Declared here rather than imported from @ctrlclickdiff/shared
@@ -151,9 +151,22 @@ export const api = {
     return getJson<BrowseListing>(url);
   },
 
-  /** GET /api/commits -> newest-first commit log (up to 100). */
-  commits(repoId: string): Promise<CommitInfo[]> {
-    return getRepoJson<CommitInfo[]>(repoId, '/api/commits');
+  /** GET /api/branches -> every local and remote-tracking branch, HEAD flagged. */
+  branches(repoId: string): Promise<BranchInfo[]> {
+    return getRepoJson<BranchInfo[]>(repoId, '/api/branches');
+  },
+
+  /**
+   * GET /api/commits -> newest-first commit log of `ref` (up to 100).
+   *
+   * `ref` must be a **full** refname as `branches()` reported it
+   * (`refs/heads/main`), which is also the only shape the backend's route
+   * schema accepts — a short name is a 400, not a lookup. Omitting it asks for
+   * HEAD's log, which is what the shell does before it has a branch to name.
+   */
+  commits(repoId: string, ref?: string): Promise<CommitInfo[]> {
+    const url = ref === undefined ? '/api/commits' : '/api/commits?ref=' + encodeURIComponent(ref);
+    return getRepoJson<CommitInfo[]>(repoId, url);
   },
 
   /** GET /api/commit/:sha/files -> resolved head/base SHAs + changed .kt files. */
