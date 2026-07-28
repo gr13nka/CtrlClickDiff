@@ -9,9 +9,10 @@
 // highlighting/loading path.
 
 import type { ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
-import { api, type RepoEntry } from './api';
+import { api, type ReposListing, type RepoEntry } from './api';
 import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
+import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
 
 // The repository every request below is scoped to. Null only before boot()
 // has resolved one — there is no "no repo" state the UI can reach afterwards.
@@ -55,6 +56,9 @@ function stale(e: number): boolean {
 
 let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
+let repoButtonEl: HTMLButtonElement | null = null;
+let repoNameEl: HTMLElement | null = null;
+let commitSelectEl: HTMLSelectElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
 
 export function getRepoId(): string {
@@ -81,8 +85,9 @@ export function getBaseSha(): string {
 }
 
 /**
- * Builds the sidebar (commit picker + changed-file list) and the diff pane
- * inside `rootEl`, then kicks off loading the commit log. Call once at boot.
+ * Builds the sidebar (repo bar + commit picker + changed-file list) and the
+ * diff pane inside `rootEl`, then kicks off loading the commit log. Call once
+ * at boot.
  */
 export function initShell(rootEl: HTMLElement): void {
   rootEl.innerHTML = '';
@@ -90,6 +95,29 @@ export function initShell(rootEl: HTMLElement): void {
 
   const sidebar = document.createElement('div');
   sidebar.className = 'ccd-sidebar';
+
+  // Above the commit picker because it scopes it: the commits below belong to
+  // this repository, and a reader who misses that reads the wrong history.
+  const repoBar = document.createElement('div');
+  repoBar.className = 'ccd-repo-bar';
+
+  const repoButton = document.createElement('button');
+  repoButton.className = 'ccd-repo-button';
+  repoButton.type = 'button';
+  repoButton.addEventListener('click', () => {
+    openRepoPicker({ onPick: (entry) => void switchRepo(entry) });
+  });
+
+  // The name lives in its own element so it can ellipsise without taking the
+  // caret (a CSS ::after on the button) off the row with it.
+  const repoName = document.createElement('span');
+  repoName.className = 'ccd-repo-name';
+  repoButton.append(repoName);
+
+  repoButtonEl = repoButton;
+  repoNameEl = repoName;
+  renderRepoBar();
+  repoBar.append(repoButton);
 
   const picker = document.createElement('div');
   picker.className = 'ccd-picker';
@@ -105,6 +133,7 @@ export function initShell(rootEl: HTMLElement): void {
   select.addEventListener('change', () => {
     if (select.value) void selectCommit(select.value);
   });
+  commitSelectEl = select;
 
   picker.append(label, select);
 
@@ -116,7 +145,7 @@ export function initShell(rootEl: HTMLElement): void {
   list.className = 'ccd-file-list';
   fileListEl = list;
 
-  sidebar.append(picker, status, list);
+  sidebar.append(repoBar, picker, status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
   // #app.ccd-app). The tooltip is the only place the double-click reset is
@@ -134,7 +163,7 @@ export function initShell(rootEl: HTMLElement): void {
 
   initDiff(diffPane);
 
-  void boot(select);
+  void boot();
 }
 
 /**
@@ -143,14 +172,14 @@ export function initShell(rootEl: HTMLElement): void {
  * The backend serves many repos and names none of them implicitly, so the id
  * has to come from somewhere before the first request: `GET /api/repos` reports
  * the boot REPO_ROOT as `defaultRepoId`, which is what keeps single-repo
- * behaviour identical to before this existed — start the backend with
+ * behaviour identical to before any of this existed — start the backend with
  * REPO_ROOT, get that repo.
  */
-async function boot(select: HTMLSelectElement): Promise<void> {
+async function boot(): Promise<void> {
   const e = beginEpoch();
   setStatus('Loading repository…');
 
-  let listing;
+  let listing: ReposListing;
   try {
     listing = await api.repos();
   } catch (err) {
@@ -160,14 +189,93 @@ async function boot(select: HTMLSelectElement): Promise<void> {
   }
   if (stale(e)) return;
 
-  const entry = listing.repos.find((r) => r.id === listing.defaultRepoId);
+  const entry = await preferredRepo(listing);
+  if (stale(e)) return;
   if (!entry) {
     setStatus('No repository configured. Start the backend with REPO_ROOT set.');
     return;
   }
 
+  adoptRepo(entry);
+  await loadCommits();
+}
+
+/**
+ * The repo to open on a fresh page: whatever was open last, else the backend's
+ * default.
+ *
+ * The stored *path* is re-registered rather than the stored id reused. Ids are
+ * stable for a path, but the registry that hands them out is memory-only, so a
+ * remembered id may name nothing at all in this backend process — while the
+ * path always re-derives it. A repo that has since moved or been deleted is
+ * dropped from recents and the boot falls through to the default, because
+ * "your last repository is gone" must not be a dead end the user has to clear
+ * their storage to escape.
+ */
+async function preferredRepo(listing: ReposListing): Promise<RepoEntry | null> {
+  const recent = readRecents()[0];
+  if (recent) {
+    try {
+      return await api.registerRepo(recent.path);
+    } catch (err) {
+      console.warn(`[ccd] last repo ${recent.path} no longer registers: ${errorMessage(err)}`);
+      forgetRecent(recent.path);
+    }
+  }
+  return listing.repos.find((r) => r.id === listing.defaultRepoId) ?? null;
+}
+
+/** Makes `entry` the current repo, in state, in recents and on screen. */
+function adoptRepo(entry: RepoEntry): void {
   repo = entry;
-  await loadCommits(select);
+  rememberRecent(entry);
+  renderRepoBar();
+}
+
+/**
+ * Points the whole shell at another repository and reloads its commit log.
+ *
+ * Claims an epoch before touching anything: a commit or file load still in
+ * flight belongs to the *old* repo, and letting it land would paint that repo's
+ * files over this one's. (loadCommits claims another one on the way in — entry
+ * points nest here, as they already do for selectCommit -> openFile.)
+ *
+ * Monaco's models for the old repo are deliberately left alive. They are keyed
+ * by a URI whose authority is the repo id, so nothing this repo creates can
+ * collide with them, and disposing them would only cost a re-fetch if the user
+ * switches back.
+ */
+async function switchRepo(entry: RepoEntry): Promise<void> {
+  if (repo?.id === entry.id) return;
+
+  beginEpoch();
+  adoptRepo(entry);
+
+  // Collapse state is keyed by directory path, and those paths describe a tree
+  // that does not exist in the new repo.
+  resetFileTreeState();
+
+  headSha = '';
+  baseSha = '';
+  files = [];
+  activePath = '';
+  rowsByPath.clear();
+  if (fileListEl) fileListEl.innerHTML = '';
+
+  await loadCommits();
+}
+
+/**
+ * The bar shows the repo's *name* and carries its full path as the tooltip:
+ * the sidebar is 300px by default and a checkout path does not fit in it, but
+ * two repos can share a basename, so the path has to remain reachable.
+ */
+function renderRepoBar(): void {
+  if (!repoButtonEl || !repoNameEl) return;
+  repoNameEl.textContent = repo?.name ?? 'Choose repository…';
+  repoButtonEl.title = repo
+    ? `${repo.path} — click to switch repository`
+    : 'Click to choose a repository';
 }
 
 /**
@@ -202,7 +310,17 @@ export async function openFile(path: string): Promise<void> {
   }
 }
 
-async function loadCommits(select: HTMLSelectElement): Promise<void> {
+/**
+ * Fills the commit picker from the current repo's log and opens its newest
+ * commit. Reads the <select> from module state rather than taking it as an
+ * argument: it is called from boot() and again from every repo switch, and a
+ * caller that had to carry the element around would be carrying it only to
+ * hand it straight back.
+ */
+async function loadCommits(): Promise<void> {
+  const select = commitSelectEl;
+  if (!select) return;
+
   const e = beginEpoch();
   setStatus('Loading commits…');
   let commits: CommitInfo[];
@@ -219,9 +337,8 @@ async function loadCommits(select: HTMLSelectElement): Promise<void> {
     return;
   }
 
-  // Repopulate, don't append: this runs once at boot today, but a second
-  // call (the planned branch selector) would otherwise stack a whole second
-  // commit log onto the first.
+  // Repopulate, don't append: every repo switch calls this again, and
+  // appending would stack the new repo's log under the old repo's.
   select.innerHTML = '';
   for (const commit of commits) {
     const opt = document.createElement('option');
@@ -312,8 +429,8 @@ type FileNode = Extract<TreeNode, { kind: 'file' }>;
 const collapsedDirs = new Set<string>();
 
 /**
- * Forgets every collapse. For a repo switch, where the retained paths would
- * describe a tree that no longer exists — nothing calls this yet.
+ * Forgets every collapse. Called on a repo switch (see switchRepo), where the
+ * retained paths describe a tree that no longer exists.
  */
 export function resetFileTreeState(): void {
   collapsedDirs.clear();

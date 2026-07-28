@@ -30,6 +30,14 @@
         --ccd-danger: #f85149;
         --ccd-on-badge: #0d1117;
 
+        /* Overlay. The repo picker needs two roles no surface token covers: a
+           dimmed backdrop and an elevation shadow. Both are translucent black
+           rather than a surface colour on purpose — they read correctly over
+           whatever the palette underneath becomes, so the pending Primer swap
+           does not have to touch them. */
+        --ccd-backdrop: rgb(0 0 0 / 55%);
+        --ccd-shadow: rgb(0 0 0 / 45%);
+
         /* Metrics. The sidebar width is the live, draggable value (shell.ts
            overwrites it on #app); the -min/-max pair is the clamp the drag is
            held to, declared here so the numbers exist in exactly one place —
@@ -69,6 +77,57 @@
         background: var(--ccd-canvas-inset);
         border-right: 1px solid var(--ccd-border);
         overflow: hidden;
+      }
+
+      /* Repo bar — the sidebar's first row, above the commit picker, because it
+         scopes it: the commits below belong to this repository. Deliberately
+         one control tall with no label of its own; the sidebar is 300px by
+         default and already owes its height to a picker, a status line and a
+         file tree. */
+      .ccd-repo-bar {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--ccd-border);
+      }
+
+      .ccd-repo-button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px 6px;
+        background: var(--ccd-control-bg);
+        color: var(--ccd-fg-emphasis);
+        border: 1px solid var(--ccd-border-strong);
+        border-radius: 4px;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .ccd-repo-button:hover {
+        background: var(--ccd-canvas-subtle);
+      }
+
+      /* The caret is CSS, so the only thing shell.ts writes into this button is
+         the repo name — the affordance cannot go missing on a re-render. */
+      .ccd-repo-button::after {
+        content: '▾';
+        flex: 0 0 auto;
+        color: var(--ccd-fg-muted);
+      }
+
+      /* Its own element rather than a bare text node: an anonymous flex item
+         cannot take min-width:0, and without that the ellipsis never fires and
+         a long repo name pushes the caret off the row. */
+      .ccd-repo-name {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font: 12px ui-monospace, monospace;
       }
 
       .ccd-picker {
@@ -260,6 +319,273 @@
       .ccd-diff-pane {
         min-width: 0;
         min-height: 0;
+      }
+
+      /* ------------------------------------------------------------------
+         Repo picker modal (repopicker.ts)
+
+         Appended to <body>, not into the sidebar, for two reasons: a directory
+         browser has to show paths and the sidebar is 220-640px wide, and #app's
+         grid would otherwise have to make room for it. Being outside #app also
+         means none of #app.ccd-app's inherited font and colour reach it, which
+         is why .ccd-modal restates both.
+         ------------------------------------------------------------------ */
+      .ccd-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--ccd-backdrop);
+      }
+
+      .ccd-modal {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        box-sizing: border-box;
+        width: min(680px, 90vw);
+        max-height: min(560px, 82vh);
+        padding: 14px 16px;
+        background: var(--ccd-canvas);
+        border: 1px solid var(--ccd-border-strong);
+        border-radius: 6px;
+        box-shadow: 0 12px 32px var(--ccd-shadow);
+        font: 13px/1.4 system-ui, sans-serif;
+        color: var(--ccd-fg);
+      }
+
+      .ccd-modal-title {
+        flex: 0 0 auto;
+        font-size: 14px;
+        color: var(--ccd-fg-emphasis);
+      }
+
+      .ccd-recents {
+        flex: 0 0 auto;
+      }
+
+      .ccd-recent-list,
+      .ccd-browse-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .ccd-recent-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 3px 6px;
+        background: transparent;
+        border: 0;
+        border-radius: 3px;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .ccd-recent-row:hover {
+        background: var(--ccd-canvas-subtle);
+      }
+
+      .ccd-recent-name {
+        flex: 0 0 auto;
+        color: var(--ccd-fg-emphasis);
+        font: 12px ui-monospace, monospace;
+      }
+
+      /* The path is what tells two checkouts with the same basename apart, so it
+         is shown rather than tooltipped — truncated from the right when it must
+         be, since the tail is the distinguishing half. */
+      .ccd-recent-path {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--ccd-fg-muted);
+        font-size: 11px;
+      }
+
+      .ccd-modal-nav {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+        min-width: 0;
+      }
+
+      /* Scrolls rather than wraps: a deep path that wrapped would change the
+         modal's height on every step into a directory. */
+      .ccd-crumbs {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        overflow-x: auto;
+      }
+
+      .ccd-crumb {
+        flex: 0 0 auto;
+        padding: 2px 4px;
+        background: transparent;
+        border: 0;
+        border-radius: 3px;
+        color: var(--ccd-fg);
+        font: 12px ui-monospace, monospace;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+
+      .ccd-crumb:hover {
+        background: var(--ccd-canvas-subtle);
+        color: var(--ccd-fg-emphasis);
+      }
+
+      /* Separators as generated content, so the crumb list stays exactly one
+         element per directory and nothing has to clean up stray '/' nodes. */
+      .ccd-crumb + .ccd-crumb::before {
+        content: '/';
+        margin-right: 4px;
+        color: var(--ccd-fg-muted);
+      }
+
+      .ccd-icon-btn {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        color: var(--ccd-fg-muted);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .ccd-icon-btn:hover:not(:disabled) {
+        background: var(--ccd-canvas-subtle);
+        color: var(--ccd-fg-emphasis);
+      }
+
+      .ccd-icon-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
+      }
+
+      .ccd-browse-list {
+        flex: 1 1 auto;
+        min-height: 140px;
+        overflow-y: auto;
+        background: var(--ccd-canvas-inset);
+        border: 1px solid var(--ccd-border);
+        border-radius: 4px;
+      }
+
+      .ccd-browse-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding-right: 4px;
+      }
+
+      .ccd-browse-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 4px 8px;
+        background: transparent;
+        border: 0;
+        border-radius: 3px;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .ccd-browse-row:hover {
+        background: var(--ccd-canvas-subtle);
+      }
+
+      /* Same treatment the active file row gets, for the same reason: selection
+         is the state the Open button reads, so it has to be unmistakable. */
+      .ccd-browse-row.selected {
+        background: var(--ccd-accent-bg);
+        color: var(--ccd-accent-fg);
+      }
+
+      .ccd-browse-name {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font: 12px ui-monospace, monospace;
+      }
+
+      .ccd-repo-badge {
+        flex: 0 0 auto;
+        padding: 0 5px;
+        border-radius: 3px;
+        background: var(--ccd-success);
+        color: var(--ccd-on-badge);
+        font: 700 10px/16px ui-monospace, monospace;
+      }
+
+      .ccd-browse-empty {
+        padding: 8px;
+        color: var(--ccd-fg-muted);
+      }
+
+      .ccd-modal-foot {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+      }
+
+      .ccd-modal-msg {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--ccd-fg-muted);
+        font-size: 12px;
+      }
+
+      .ccd-btn {
+        flex: 0 0 auto;
+        padding: 4px 12px;
+        background: var(--ccd-control-bg);
+        color: var(--ccd-fg-emphasis);
+        border: 1px solid var(--ccd-border-strong);
+        border-radius: 4px;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .ccd-btn:hover:not(:disabled) {
+        background: var(--ccd-canvas-subtle);
+      }
+
+      .ccd-btn:disabled {
+        color: var(--ccd-fg-muted);
+        cursor: default;
+      }
+
+      .ccd-btn-primary:not(:disabled) {
+        background: var(--ccd-accent-bg);
+        color: var(--ccd-accent-fg);
+        border-color: var(--ccd-accent-bg);
       }
     </style>
   </head>
