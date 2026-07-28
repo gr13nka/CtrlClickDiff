@@ -4,11 +4,12 @@
 // (`/api/commits`, `/api/commit/:sha/files`, `/api/file`). Milestone 3 adds
 // `/api/def` + `/api/index` backed by `TreeSitterResolver`.
 //
-// This backend serves exactly ONE git repository, whose path comes from
-// REPO_ROOT (see git.ts's getRepoRoot — throws a clear error if unset). All
-// routes are namespaced under /api so the frontend's Vite dev server can proxy
-// /api -> http://127.0.0.1:5178 (see packages/frontend/vite.config.ts) while
-// leaving room for non-API routes (e.g. serving the built frontend) later.
+// This backend serves any git repository registered through `/api/repos`, which
+// only accepts repositories under the browse root (see repos.ts). REPO_ROOT is
+// optional: when set it is auto-registered at boot and becomes the default repo.
+// All routes are namespaced under /api so the frontend's Vite dev server can
+// proxy /api -> http://127.0.0.1:5178 (see packages/frontend/vite.config.ts)
+// while leaving room for non-API routes (e.g. serving the built frontend) later.
 
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve as resolvePath } from 'node:path';
@@ -16,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import type { ChangedFile, CommitFiles, CommitInfo, DefLocation } from '@ctrlclickdiff/shared';
 import { changedKtFiles, getRepoRoot, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
+import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -31,8 +33,51 @@ const app = Fastify({
 // once at boot (below) before the app starts accepting requests.
 const resolver = new TreeSitterResolver();
 
+// Resolved here, ahead of the Fastify logger's own boot block, because every
+// repo route closes over the registry and so needs it at declaration time. A
+// failure is an unusable CCD_BROWSE_ROOT — a boot misconfiguration that must
+// abort the process, which an unhandled top-level rejection duly does.
+const browseRoot = await resolveBrowseRoot();
+const repos = new RepoRegistry(browseRoot);
+
 app.get('/health', async () => {
   return { ok: true };
+});
+
+// POST /api/repos {path} -> RepoEntry — register a repository under the browse
+// root, or return the entry an already-known path maps to. Idempotent: ids are
+// derived from the path, so re-posting is free and always yields the same id.
+app.post<{ Body: { path: string } }>(
+  '/api/repos',
+  {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['path'],
+        properties: {
+          path: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  },
+  async (request, reply): Promise<RepoEntry | { error: string }> => {
+    try {
+      return await repos.register(request.body.path);
+    } catch (err) {
+      // Only a rejected *path* is the caller's fault. Anything else (a git
+      // binary that vanished, an I/O fault) is ours — rethrow it so Fastify
+      // reports a 500 instead of blaming the client for a server problem.
+      if (!(err instanceof InvalidRepoPathError)) throw err;
+      reply.code(400);
+      return { error: err.message };
+    }
+  },
+);
+
+// GET /api/repos -> everything the frontend needs to populate a repo picker:
+// what is registered, which one to preselect, and where browsing may start.
+app.get('/api/repos', async () => {
+  return { repos: repos.list(), defaultRepoId: repos.defaultRepoId, browseRoot };
 });
 
 // GET /api/commits -> CommitInfo[]
@@ -159,10 +204,18 @@ const port = Number(process.env.PORT ?? 5178);
 const host = '127.0.0.1';
 
 try {
-  // Read (and validate) REPO_ROOT before binding a port — fail fast and loud
-  // if it's unset rather than 500ing on the first request.
-  const repoRoot = getRepoRoot();
-  app.log.info(`REPO_ROOT: ${repoRoot}`);
+  app.log.info(`browse root: ${browseRoot}`);
+
+  // REPO_ROOT is now optional — without it the backend starts empty and waits
+  // for the frontend to register repos through POST /api/repos. Set but invalid
+  // is still fatal, though: that is a typo, not a deliberate choice, and
+  // limping on would only surface the mistake as a confusing per-request error.
+  if (process.env.REPO_ROOT) {
+    const boot = await repos.registerBootRepo(process.env.REPO_ROOT);
+    app.log.info(`REPO_ROOT: ${boot.path} (default repo ${boot.id})`);
+  } else {
+    app.log.info('REPO_ROOT unset — no default repo; register one via POST /api/repos');
+  }
 
   // init() loads the Kotlin WASM grammar + compiles tags.scm once; must
   // finish before any /api/def or /api/index request can be served.

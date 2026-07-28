@@ -56,6 +56,21 @@ async function run(repoRoot: string, args: string[]): Promise<string> {
   return stdout;
 }
 
+/**
+ * `git rev-parse --show-toplevel` with `cwd` = `dir` — the absolute path of the
+ * working tree `dir` belongs to, whether `dir` is the repository root or any
+ * directory beneath it. Rejects when `dir` is not inside a working tree at all
+ * (including a bare repository, which has none), which is how `repos.ts`
+ * distinguishes "a directory" from "a repository it can serve".
+ *
+ * Note the argument here is a plain cwd, not necessarily a repo root — that is
+ * the whole point: callers use this to *find* the root.
+ */
+export async function revParseToplevel(dir: string): Promise<string> {
+  const stdout = await run(dir, ['rev-parse', '--show-toplevel']);
+  return stdout.trim();
+}
+
 /** `git log --format=%H%x00%s%x00%an -n 100`, split on NUL per record. */
 export async function listCommits(repoRoot: string): Promise<CommitInfo[]> {
   const stdout = await run(repoRoot, ['log', '--format=%H%x00%s%x00%an', '-n', '100']);
