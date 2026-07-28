@@ -94,11 +94,6 @@ export class TreeSitterResolver implements SymbolResolver {
    * cache hit means "switch back to a rev we've already built", not
    * "nothing to do".
    */
-  // `repoRoot` is part of the SymbolResolver interface shape but unused in
-  // the body below: git.ts's helpers (listKtFilesAtRev/showFile) resolve the
-  // repo root themselves from the process-wide REPO_ROOT env var — this
-  // backend serves exactly one repo per process (see git.ts's getRepoRoot),
-  // so there is nothing for a per-call repoRoot to override.
   async buildIndex(repoRoot: string, revision: string): Promise<void> {
     if (this.indexByRevision.has(revision)) {
       this.activeRevision = revision;
@@ -110,11 +105,11 @@ export class TreeSitterResolver implements SymbolResolver {
     const parser = this.parser;
     const query = this.query;
 
-    const paths = await listKtFilesAtRev(revision);
+    const paths = await listKtFilesAtRev(repoRoot, revision);
     const index: Index = new Map();
 
     for (const path of paths) {
-      const source = await showFile(revision, path);
+      const source = await showFile(repoRoot, revision, path);
       if (!source) continue; // deleted/empty at this rev
 
       const tree = parser.parse(source);

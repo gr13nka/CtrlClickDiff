@@ -46,10 +46,10 @@ export function getRepoRoot(): string {
   return cachedRepoRoot;
 }
 
-/** execFile('git', args, {cwd: REPO_ROOT, ...}) — see the safety rule above. */
-async function run(args: string[]): Promise<string> {
+/** execFile('git', args, {cwd: repoRoot, ...}) — see the safety rule above. */
+async function run(repoRoot: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, {
-    cwd: getRepoRoot(),
+    cwd: repoRoot,
     maxBuffer: MAX_BUFFER,
     encoding: 'utf8',
   });
@@ -57,8 +57,8 @@ async function run(args: string[]): Promise<string> {
 }
 
 /** `git log --format=%H%x00%s%x00%an -n 100`, split on NUL per record. */
-export async function listCommits(): Promise<CommitInfo[]> {
-  const stdout = await run(['log', '--format=%H%x00%s%x00%an', '-n', '100']);
+export async function listCommits(repoRoot: string): Promise<CommitInfo[]> {
+  const stdout = await run(repoRoot, ['log', '--format=%H%x00%s%x00%an', '-n', '100']);
   const commits: CommitInfo[] = [];
   for (const line of stdout.split('\n')) {
     if (!line) continue; // trailing newline from git log
@@ -74,8 +74,8 @@ export async function listCommits(): Promise<CommitInfo[]> {
  * collision-free identifier for model URIs (`file:///<sha>/<path>`) regardless
  * of what the caller passed in the URL.
  */
-export async function resolveSha(rev: string): Promise<string> {
-  const stdout = await run(['rev-parse', rev]);
+export async function resolveSha(repoRoot: string, rev: string): Promise<string> {
+  const stdout = await run(repoRoot, ['rev-parse', rev]);
   return stdout.trim();
 }
 
@@ -89,8 +89,8 @@ export async function resolveSha(rev: string): Promise<string> {
  * contract's FileStatus is only 'A' | 'M' | 'D'; treating a rename as a plain
  * add+delete pair is out of scope for the MVP (no rename-aware UI).
  */
-export async function changedKtFiles(sha: string): Promise<ChangedFile[]> {
-  const stdout = await run(['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', sha]);
+export async function changedKtFiles(repoRoot: string, sha: string): Promise<ChangedFile[]> {
+  const stdout = await run(repoRoot, ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', sha]);
   const files: ChangedFile[] = [];
   for (const line of stdout.split('\n')) {
     if (!line) continue;
@@ -109,8 +109,8 @@ export async function changedKtFiles(sha: string): Promise<ChangedFile[]> {
  * list `TreeSitterResolver.buildIndex` parses to build a revision's symbol
  * index (Milestone 3).
  */
-export async function listKtFilesAtRev(rev: string): Promise<string[]> {
-  const stdout = await run(['ls-tree', '-r', '--name-only', rev]);
+export async function listKtFilesAtRev(repoRoot: string, rev: string): Promise<string[]> {
+  const stdout = await run(repoRoot, ['ls-tree', '-r', '--name-only', rev]);
   return stdout.split('\n').filter((path) => path.endsWith('.kt'));
 }
 
@@ -119,9 +119,9 @@ export async function listKtFilesAtRev(rev: string): Promise<string[]> {
  * or the empty-tree hash for a root commit (which has no parent — rev-parse
  * exits non-zero and we catch that as "no parent" rather than a real error).
  */
-export async function resolveBaseSha(sha: string): Promise<string> {
+export async function resolveBaseSha(repoRoot: string, sha: string): Promise<string> {
   try {
-    const stdout = await run(['rev-parse', `${sha}^`]);
+    const stdout = await run(repoRoot, ['rev-parse', `${sha}^`]);
     return stdout.trim();
   } catch {
     return EMPTY_TREE_SHA;
@@ -135,9 +135,9 @@ export async function resolveBaseSha(sha: string): Promise<string> {
  * required so one-sided diffs (added/deleted files, root-commit base side)
  * render as an empty original/modified model instead of erroring.
  */
-export async function showFile(rev: string, path: string): Promise<string> {
+export async function showFile(repoRoot: string, rev: string, path: string): Promise<string> {
   try {
-    return await run(['show', `${rev}:${path}`]);
+    return await run(repoRoot, ['show', `${rev}:${path}`]);
   } catch {
     return '';
   }

@@ -37,7 +37,7 @@ app.get('/health', async () => {
 
 // GET /api/commits -> CommitInfo[]
 app.get('/api/commits', async (): Promise<CommitInfo[]> => {
-  return listCommits();
+  return listCommits(getRepoRoot());
 });
 
 // GET /api/commit/:sha/files -> CommitFiles
@@ -65,15 +65,15 @@ app.get<{ Params: { sha: string } }>(
     // bare 500 from a rejected git process.
     let headSha: string;
     try {
-      headSha = await resolveSha(sha);
+      headSha = await resolveSha(getRepoRoot(), sha);
     } catch {
       reply.code(404);
       return { error: `commit not found: ${sha}` };
     }
 
     const [files, baseSha]: [ChangedFile[], string] = await Promise.all([
-      changedKtFiles(headSha),
-      resolveBaseSha(headSha),
+      changedKtFiles(getRepoRoot(), headSha),
+      resolveBaseSha(getRepoRoot(), headSha),
     ]);
 
     return { headSha, baseSha, files };
@@ -97,7 +97,7 @@ app.get<{ Querystring: { rev: string; path: string } }>(
   },
   async (request, reply) => {
     const { rev, path } = request.query;
-    const content = await showFile(rev, path);
+    const content = await showFile(getRepoRoot(), rev, path);
     reply.type('text/plain; charset=utf-8');
     return content;
   },
