@@ -23,28 +23,14 @@ const MAX_BUFFER = 64 * 1024 * 1024; // 64MB — generous ceiling for `git log`/
  */
 export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
-let cachedRepoRoot: string | undefined;
-
 /**
- * Resolve REPO_ROOT from the environment, memoized after the first successful
- * read. This backend serves exactly one git repository (see the M2 API
- * contract) — a missing REPO_ROOT is a misconfiguration, not a per-request
- * condition, so this throws a clear, actionable error rather than letting git
- * fail later with a confusing ENOENT/cwd error.
+ * Every function here takes the repository to operate on as its first argument.
+ * There is deliberately no module-level "current repo" and no REPO_ROOT lookup:
+ * one process serves many repositories (see repos.ts), and the caller — which
+ * has the request in hand — is the only party that knows which one a given call
+ * is for. Reintroducing a cached default here would silently answer some
+ * requests from the wrong repository.
  */
-export function getRepoRoot(): string {
-  if (cachedRepoRoot !== undefined) return cachedRepoRoot;
-  const root = process.env.REPO_ROOT;
-  if (!root) {
-    throw new Error(
-      'REPO_ROOT environment variable is not set. CtrlClickDiff serves a single ' +
-        'git repository whose path must be supplied via REPO_ROOT, e.g.\n' +
-        '  REPO_ROOT=/path/to/repo pnpm --filter @ctrlclickdiff/backend dev',
-    );
-  }
-  cachedRepoRoot = root;
-  return cachedRepoRoot;
-}
 
 /** execFile('git', args, {cwd: repoRoot, ...}) — see the safety rule above. */
 async function run(repoRoot: string, args: string[]): Promise<string> {

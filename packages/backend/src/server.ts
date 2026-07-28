@@ -16,7 +16,7 @@ import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import type { ChangedFile, CommitFiles, CommitInfo, DefLocation } from '@ctrlclickdiff/shared';
-import { changedKtFiles, getRepoRoot, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
+import { changedKtFiles, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
 
@@ -80,13 +80,76 @@ app.get('/api/repos', async () => {
   return { repos: repos.list(), defaultRepoId: repos.defaultRepoId, browseRoot };
 });
 
-// GET /api/commits -> CommitInfo[]
-app.get('/api/commits', async (): Promise<CommitInfo[]> => {
-  return listCommits(getRepoRoot());
-});
+/**
+ * `?repo=` is OPTIONAL on every data route, falling back to the REPO_ROOT repo.
+ * That is what lets this change ship on its own: existing callers (and the
+ * current frontend) keep working untouched, and the frontend can start sending
+ * a repo id whenever it is ready, in its own commit.
+ */
+const REPO_QUERY_PROPERTY = { repo: { type: 'string', minLength: 1 } } as const;
 
-// GET /api/commit/:sha/files -> CommitFiles
-app.get<{ Params: { sha: string } }>(
+type RepoRootResult =
+  | { ok: true; root: string }
+  | { ok: false; status: number; body: { error: string } };
+
+/**
+ * Map a request's optional `repo` id to the repository root git should run in.
+ *
+ * An unknown id answers **409, not 404**, and the difference carries the whole
+ * restart-recovery design. The registry lives in memory, so a backend restart
+ * silently empties it while the frontend still holds ids that were valid a
+ * moment ago. 404 would read as "no such repository, give up"; 409 says the
+ * client's view of server state conflicts with the server's, which is exactly
+ * true and is actionable — the frontend re-registers its repo via
+ * POST /api/repos (idempotent, same id back) and retries the request once. That
+ * single status code is the entire recovery story; nothing else needs to know a
+ * restart happened.
+ */
+function repoRootFor(repo: string | undefined): RepoRootResult {
+  if (repo !== undefined) {
+    const root = repos.resolveRoot(repo);
+    if (root === undefined) return { ok: false, status: 409, body: { error: 'repo_not_registered' } };
+    return { ok: true, root };
+  }
+
+  const fallback = repos.defaultRoot();
+  if (fallback === undefined) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error:
+          'no repo specified and no default repo is configured. Pass ?repo=<id> ' +
+          'from GET /api/repos, or start the backend with REPO_ROOT set.',
+      },
+    };
+  }
+  return { ok: true, root: fallback };
+}
+
+// GET /api/commits?repo=<id> -> CommitInfo[]
+app.get<{ Querystring: { repo?: string } }>(
+  '/api/commits',
+  {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: { ...REPO_QUERY_PROPERTY },
+      },
+    },
+  },
+  async (request, reply): Promise<CommitInfo[] | { error: string }> => {
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      reply.code(root.status);
+      return root.body;
+    }
+    return listCommits(root.root);
+  },
+);
+
+// GET /api/commit/:sha/files?repo=<id> -> CommitFiles
+app.get<{ Params: { sha: string }; Querystring: { repo?: string } }>(
   '/api/commit/:sha/files',
   {
     schema: {
@@ -97,10 +160,19 @@ app.get<{ Params: { sha: string } }>(
           sha: { type: 'string', minLength: 1 },
         },
       },
+      querystring: {
+        type: 'object',
+        properties: { ...REPO_QUERY_PROPERTY },
+      },
     },
   },
   async (request, reply): Promise<CommitFiles | { error: string }> => {
     const { sha } = request.params;
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      reply.code(root.status);
+      return root.body;
+    }
 
     // Resolve to a concrete 40-char SHA first (git rev-parse) so headSha is
     // stable regardless of what the caller passed (abbreviated sha, "HEAD",
@@ -110,23 +182,23 @@ app.get<{ Params: { sha: string } }>(
     // bare 500 from a rejected git process.
     let headSha: string;
     try {
-      headSha = await resolveSha(getRepoRoot(), sha);
+      headSha = await resolveSha(root.root, sha);
     } catch {
       reply.code(404);
       return { error: `commit not found: ${sha}` };
     }
 
     const [files, baseSha]: [ChangedFile[], string] = await Promise.all([
-      changedKtFiles(getRepoRoot(), headSha),
-      resolveBaseSha(getRepoRoot(), headSha),
+      changedKtFiles(root.root, headSha),
+      resolveBaseSha(root.root, headSha),
     ]);
 
     return { headSha, baseSha, files };
   },
 );
 
-// GET /api/file?rev=<sha>&path=<p> -> text/plain (source, or '' if absent at rev)
-app.get<{ Querystring: { rev: string; path: string } }>(
+// GET /api/file?rev=<sha>&path=<p>&repo=<id> -> text/plain (source, or '' if absent at rev)
+app.get<{ Querystring: { rev: string; path: string; repo?: string } }>(
   '/api/file',
   {
     schema: {
@@ -136,13 +208,21 @@ app.get<{ Querystring: { rev: string; path: string } }>(
         properties: {
           rev: { type: 'string', minLength: 1 },
           path: { type: 'string', minLength: 1 },
+          ...REPO_QUERY_PROPERTY,
         },
       },
     },
   },
   async (request, reply) => {
     const { rev, path } = request.query;
-    const content = await showFile(getRepoRoot(), rev, path);
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      // Left as JSON (reply.type below is never reached) so an error here is
+      // machine-readable like every other route's, not a text/plain surprise.
+      reply.code(root.status);
+      return root.body;
+    }
+    const content = await showFile(root.root, rev, path);
     reply.type('text/plain; charset=utf-8');
     return content;
   },
@@ -153,7 +233,9 @@ app.get<{ Querystring: { rev: string; path: string } }>(
 // buildIndex is cached per-rev (no-op + no re-parse if `rev` was already
 // indexed by a prior /api/def or /api/index call), so this is cheap on the
 // second-and-later Ctrl+click for a given commit.
-app.get<{ Querystring: { name: string; file: string; line: number; lang: 'kotlin'; rev: string } }>(
+app.get<{
+  Querystring: { name: string; file: string; line: number; lang: 'kotlin'; rev: string; repo?: string };
+}>(
   '/api/def',
   {
     schema: {
@@ -166,21 +248,27 @@ app.get<{ Querystring: { name: string; file: string; line: number; lang: 'kotlin
           line: { type: 'integer', minimum: 1 },
           lang: { type: 'string', enum: ['kotlin'] },
           rev: { type: 'string', minLength: 1 },
+          ...REPO_QUERY_PROPERTY,
         },
       },
     },
   },
-  async (request): Promise<DefLocation[]> => {
+  async (request, reply): Promise<DefLocation[] | { error: string }> => {
     const { name, file, line, lang, rev } = request.query;
-    await resolver.buildIndex(getRepoRoot(), rev);
-    return resolver.resolve(getRepoRoot(), rev, { name, file, line, lang });
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      reply.code(root.status);
+      return root.body;
+    }
+    await resolver.buildIndex(root.root, rev);
+    return resolver.resolve(root.root, rev, { name, file, line, lang });
   },
 );
 
 // POST /api/index?rev=<sha> -> { ok, count } — prewarm the index for a
 // revision ahead of time (used by the M4 shell on commit-select) so the
 // first /api/def for that rev doesn't pay the parse cost inline.
-app.post<{ Querystring: { rev: string } }>(
+app.post<{ Querystring: { rev: string; repo?: string } }>(
   '/api/index',
   {
     schema: {
@@ -189,14 +277,20 @@ app.post<{ Querystring: { rev: string } }>(
         required: ['rev'],
         properties: {
           rev: { type: 'string', minLength: 1 },
+          ...REPO_QUERY_PROPERTY,
         },
       },
     },
   },
-  async (request): Promise<{ ok: true; count: number }> => {
+  async (request, reply): Promise<{ ok: true; count: number } | { error: string }> => {
     const { rev } = request.query;
-    await resolver.buildIndex(getRepoRoot(), rev);
-    return { ok: true, count: resolver.indexedCount(getRepoRoot(), rev) };
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      reply.code(root.status);
+      return root.body;
+    }
+    await resolver.buildIndex(root.root, rev);
+    return { ok: true, count: resolver.indexedCount(root.root, rev) };
   },
 );
 
