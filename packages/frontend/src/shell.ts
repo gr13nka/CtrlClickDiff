@@ -18,6 +18,30 @@ let baseSha = '';
 let files: ChangedFile[] = [];
 let activePath = '';
 
+// Guards the four fields above against out-of-order async completions.
+// Nothing serialises the async entry points below: the commit <select>'s
+// change listener just fires selectCommit(), so switching commits twice on a
+// slow repo leaves two api.commitFiles() calls in flight — and a slow
+// *earlier* response can land *after* a fast later one and overwrite it,
+// leaving the file list and diff disagreeing with the picker. So each entry
+// point claims an epoch on the way in and abandons itself after any await
+// once a newer caller has claimed one. An abandoned call must also stay
+// silent (no setStatus, no rethrow): the caller holding the current epoch
+// owns the status line and the state.
+//
+// Entry points nest — selectCommit hands off to openFile as its last act,
+// and that handoff claims a fresh epoch. That's deliberate, and the reason
+// no entry point checks staleness after awaiting another one.
+let epoch = 0;
+
+function beginEpoch(): number {
+  return ++epoch;
+}
+
+function stale(e: number): boolean {
+  return e !== epoch;
+}
+
 let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
@@ -84,6 +108,9 @@ export function initShell(rootEl: HTMLElement): void {
  * commit's changed-file set — a cross-file F12 jump can land on any .kt
  * file at headSha (the resolver indexes the whole revision, not just the
  * changed files), and that's still a valid diff to render.
+ *
+ * Claims an epoch, so an in-flight commit switch or an earlier file open is
+ * abandoned rather than allowed to race this one to the diff pane.
  */
 export async function openFile(path: string): Promise<void> {
   if (!headSha) {
@@ -92,25 +119,42 @@ export async function openFile(path: string): Promise<void> {
   if (!files.some((f) => f.path === path)) {
     console.debug(`[ccd] openFile: "${path}" is not one of this commit's changed files`);
   }
+  const e = beginEpoch();
   activePath = path;
   highlightActiveRow();
-  await createDiff(headSha, baseSha, path);
+  try {
+    await createDiff(headSha, baseSha, path);
+  } catch (err) {
+    // Superseded while the diff was loading: this failure is no longer the
+    // one the user is waiting on, and every caller turns a throw into a
+    // status message — so swallowing it here is what keeps the winner's
+    // status line intact.
+    if (stale(e)) return;
+    throw err;
+  }
 }
 
 async function loadCommits(select: HTMLSelectElement): Promise<void> {
+  const e = beginEpoch();
   setStatus('Loading commits…');
   let commits: CommitInfo[];
   try {
     commits = await api.commits();
   } catch (err) {
+    if (stale(e)) return;
     setStatus(`Error loading commits: ${errorMessage(err)}`);
     return;
   }
+  if (stale(e)) return;
   if (commits.length === 0) {
     setStatus('No commits found in repo.');
     return;
   }
 
+  // Repopulate, don't append: this runs once at boot today, but a second
+  // call (the planned branch selector) would otherwise stack a whole second
+  // commit log onto the first.
+  select.innerHTML = '';
   for (const commit of commits) {
     const opt = document.createElement('option');
     opt.value = commit.sha;
@@ -130,14 +174,17 @@ async function loadCommits(select: HTMLSelectElement): Promise<void> {
  * changed-file list, and auto-opens the first non-deleted file.
  */
 async function selectCommit(sha: string): Promise<void> {
+  const e = beginEpoch();
   setStatus('Loading commit…');
   let result: CommitFiles;
   try {
     result = await api.commitFiles(sha);
   } catch (err) {
+    if (stale(e)) return;
     setStatus(`Error loading commit: ${errorMessage(err)}`);
     return;
   }
+  if (stale(e)) return;
 
   headSha = result.headSha;
   baseSha = result.baseSha;
