@@ -17,6 +17,28 @@ export interface CommitInfo {
 }
 
 /**
+ * One entry of `GET /api/branches` — a ref the commit picker may be pointed at.
+ *
+ * `ref` is the **full** refname (`refs/heads/main`, `refs/remotes/origin/main`)
+ * and is the only value that should ever travel back to the backend as `?ref=`.
+ * The short form is ambiguous: a remote's display name `origin/main` is also a
+ * legal *local* branch name, so two different refs can share one short name, and
+ * only the full refname names exactly one of them. `name` exists purely to be
+ * shown to a human and must not be used to identify a ref.
+ */
+export interface BranchInfo {
+  /** Full refname, e.g. `refs/heads/main` — the wire value for `?ref=`. */
+  ref: string;
+  /** Display label: `main`, `origin/main`. Not an identifier. */
+  name: string;
+  kind: 'local' | 'remote';
+  /** True for the one ref HEAD currently points at (none, when detached). */
+  isHead: boolean;
+  /** 40-char SHA the ref points at. */
+  tipSha: string;
+}
+
+/**
  * Response shape for `GET /api/commit/:sha/files`. Bundles the resolved head/base
  * SHAs alongside the changed-file list so the frontend never has to compute the
  * base side itself (root commits fall back to the empty-tree hash — see

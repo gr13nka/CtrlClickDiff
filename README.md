@@ -112,6 +112,7 @@ m1-spike/           throwaway CDN spike that proved peek-in-diff before any real
 
 | Endpoint | Returns |
 |---|---|
+| `GET /api/branches` | `BranchInfo[]` — local + remote-tracking branches, full refnames |
 | `GET /api/commits` | `CommitInfo[]` (newest 100) |
 | `GET /api/commit/:sha/files` | `{ headSha, baseSha, files: ChangedFile[] }` (`.kt` only, `A`/`M`/`D`) |
 | `GET /api/file?rev=&path=` | file content at a revision (`""` for the missing side of added/deleted files) |
@@ -134,8 +135,10 @@ resizable/tree-view sidebar. The `SymbolResolver` seam keeps the resolver swappa
 - Every git call goes through one function (`packages/backend/src/git.ts`'s `run()`) using
   `execFile('git', args, …)` with an **argument array**, never a shell string, so request input
   can't inject shell commands. The only git subcommands ever invoked are `log`, `rev-parse`,
-  `diff-tree`, `ls-tree`, and `show` — all read-only plumbing. Nothing calls `checkout`,
-  `reset`, `clean`, `commit`, `push`, or any branch-mutating command.
+  `diff-tree`, `ls-tree`, `for-each-ref`, and `show` — all read-only plumbing. Nothing calls
+  `checkout`, `reset`, `clean`, `commit`, `push`, or any branch-mutating command. Listing
+  branches (`for-each-ref`) only *reads* refs; there is no code path that creates, moves, or
+  deletes one.
 - The backend reads the filesystem and never writes it. Its whole filesystem surface is
   `readFile` (the Kotlin WASM grammar + `tags.scm`, once at boot), `realpath`/`stat` to validate
   a path being registered as a repo, `readdir` to list directories for the repo picker, and

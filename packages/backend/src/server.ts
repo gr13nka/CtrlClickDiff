@@ -15,9 +15,9 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
-import type { ChangedFile, CommitFiles, CommitInfo, DefLocation } from '@ctrlclickdiff/shared';
+import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo, DefLocation } from '@ctrlclickdiff/shared';
 import { BrowsePathError, browseDirectory, type BrowseListing } from './browse';
-import { changedKtFiles, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
+import { changedKtFiles, listBranches, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
 
@@ -153,6 +153,27 @@ function repoRootFor(repo: string | undefined): RepoRootResult {
   }
   return { ok: true, root: fallback };
 }
+
+// GET /api/branches?repo=<id> -> BranchInfo[] (local + remote-tracking)
+app.get<{ Querystring: { repo?: string } }>(
+  '/api/branches',
+  {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: { ...REPO_QUERY_PROPERTY },
+      },
+    },
+  },
+  async (request, reply): Promise<BranchInfo[] | { error: string }> => {
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      reply.code(root.status);
+      return root.body;
+    }
+    return listBranches(root.root);
+  },
+);
 
 // GET /api/commits?repo=<id> -> CommitInfo[]
 app.get<{ Querystring: { repo?: string } }>(

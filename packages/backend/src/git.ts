@@ -10,7 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ChangedFile, CommitInfo, FileStatus } from '@ctrlclickdiff/shared';
+import type { BranchInfo, ChangedFile, CommitInfo, FileStatus } from '@ctrlclickdiff/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +67,60 @@ export async function listCommits(repoRoot: string): Promise<CommitInfo[]> {
     commits.push({ sha, subject: subject ?? '', author: author ?? '' });
   }
   return commits;
+}
+
+/**
+ * Every local and remote-tracking branch, as `git for-each-ref` reports them.
+ *
+ * The format asks for `%(refname)` — the **full** refname — rather than the
+ * shorter `%(refname:short)`, for two reasons. It is unambiguous (a local branch
+ * may legitimately be named `origin/main`, which `:short` renders identically to
+ * remote `refs/remotes/origin/main`), and it is exactly the form `git log` is
+ * later handed, so the value the picker sends back needs no re-expansion and
+ * cannot re-expand to a different ref than the one listed here.
+ *
+ * `%(HEAD)` yields `*` for the ref HEAD points at and a space otherwise, which
+ * is why no separate `symbolic-ref` call is needed to find the current branch.
+ */
+export async function listBranches(repoRoot: string): Promise<BranchInfo[]> {
+  const stdout = await run(repoRoot, [
+    'for-each-ref',
+    '--format=%(HEAD)%00%(refname)%00%(objectname)',
+    'refs/heads',
+    'refs/remotes',
+  ]);
+
+  const branches: BranchInfo[] = [];
+  for (const line of stdout.split('\n')) {
+    if (!line) continue;
+    const [head, ref, tipSha] = line.split('\x00');
+    if (!ref || !tipSha) continue;
+
+    // `refs/remotes/<remote>/HEAD` is a symref pointing at another ref in this
+    // very list, not a branch of its own — listing it would show the remote's
+    // default branch twice under two names.
+    if (ref.startsWith('refs/remotes/') && ref.endsWith('/HEAD')) continue;
+
+    const kind = ref.startsWith('refs/remotes/') ? 'remote' : 'local';
+    const name = ref.replace(/^refs\/(heads|remotes)\//, '');
+    branches.push({ ref, name, kind, isHead: head === '*', tipSha });
+  }
+
+  // Detached HEAD: no ref carries `*`, so without this the picker would show a
+  // list in which nothing is current — or, in a repo checked out at a bare
+  // commit with no branches at all, an empty list. The synthetic entry is a
+  // real, `git log`-able rev ('HEAD'), so selecting it works like any other.
+  if (!branches.some((b) => b.isHead)) {
+    branches.unshift({
+      ref: 'HEAD',
+      name: 'HEAD (detached)',
+      kind: 'local',
+      isHead: true,
+      tipSha: await resolveSha(repoRoot, 'HEAD'),
+    });
+  }
+
+  return branches;
 }
 
 /**
