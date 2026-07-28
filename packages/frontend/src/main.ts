@@ -2,6 +2,7 @@ import './monaco-env';
 import type * as monaco from 'monaco-editor';
 import { getModifiedEditor } from './diff';
 import { registerKotlinDefinitions } from './defprovider';
+import { installTheme } from './theme';
 import { initShell, openFile, getHeadSha, getBaseSha, getRepoId } from './shell';
 
 // Milestone 4: replaces the M3 auto-load-first-file boot with the real
@@ -38,6 +39,11 @@ const app = document.getElementById('app');
 if (!app) throw new Error('main.ts: #app element not found');
 
 registerKotlinDefinitions();
+
+// Before initShell(), which builds the diff editor: a theme set afterwards
+// would repaint the editor a frame late, and the theme is global state Monaco
+// reads at construction time.
+installTheme();
 
 window.__ccd = {
   openPath: openFile,
