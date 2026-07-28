@@ -20,6 +20,7 @@ import { BrowsePathError, browseDirectory, type BrowseListing } from './browse';
 import { changedKtFiles, listBranches, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
+import { subscribe } from './watch';
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Same fixed locations as smoke.ts's REPO_ROOT-relative resolution.
@@ -358,6 +359,77 @@ app.post<{ Querystring: { rev: string; repo?: string } }>(
     }
     await resolver.buildIndex(root.root, rev);
     return { ok: true, count: resolver.indexedCount(root.root, rev) };
+  },
+);
+
+/**
+ * A comment line every 25s. Any traffic will do — the purpose is to keep proxies
+ * and NAT tables from reaping a connection that is idle by design (a repository
+ * nobody is committing to sends nothing for hours), and to let the client notice
+ * a dead link rather than waiting forever on a socket that is quietly gone.
+ */
+const SSE_HEARTBEAT_MS = 25_000;
+
+// GET /api/watch?repo=<id> -> text/event-stream
+//
+// Emits `event: refs` with `{headSha}` whenever the repository's refs or HEAD
+// change (see watch.ts for what does *not* count as a change). The alternative
+// was the frontend polling /api/commits on a timer, which costs a `git log` per
+// tab per interval and is still late by up to that interval.
+app.get<{ Querystring: { repo?: string } }>(
+  '/api/watch',
+  {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: { ...REPO_QUERY_PROPERTY },
+      },
+    },
+  },
+  async (request, reply) => {
+    const root = repoRootFor(request.query.repo);
+    if (!root.ok) {
+      // Still a normal JSON reply — the stream only begins once the repo is known.
+      reply.code(root.status);
+      return root.body;
+    }
+
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      // Tells nginx and friends not to buffer; a buffered event stream arrives
+      // in one lump when the connection ends, which is the same as not working.
+      'x-accel-buffering': 'no',
+    });
+    // Fastify must not try to send a reply of its own for the rest of this
+    // request's life — from here the raw socket is ours.
+    reply.hijack();
+    // `retry:` sets the browser's EventSource reconnect delay, so a backend
+    // restart is recovered from in ~3s rather than the UA's default. The comment
+    // line flushes headers immediately, which is what makes a client (and a dev
+    // proxy) prove the stream is live before anything has happened in the repo.
+    reply.raw.write('retry: 3000\n\n: connected\n\n');
+
+    const send = (chunk: string): void => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) return;
+      reply.raw.write(chunk);
+    };
+
+    const unsubscribe = subscribe(root.root, (headSha) => {
+      send(`event: refs\ndata: ${JSON.stringify({ headSha })}\n\n`);
+    });
+    const heartbeat = setInterval(() => send(': ping\n\n'), SSE_HEARTBEAT_MS);
+    heartbeat.unref();
+
+    // 'close' fires for every ending — tab closed, network dropped, server
+    // shutting down — so both the interval and the repo watch are released on
+    // all of them. Without this the refcount in watch.ts never reaches zero and
+    // the inotify watches leak for the life of the process.
+    request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
   },
 );
 

@@ -58,6 +58,22 @@ export async function revParseToplevel(dir: string): Promise<string> {
 }
 
 /**
+ * `git rev-parse --path-format=absolute --git-common-dir` — the directory that
+ * actually holds this repository's `refs/`, `HEAD`, and `packed-refs`.
+ *
+ * The *common* dir, not `--git-dir`, because they differ in a linked worktree:
+ * `--git-dir` there is `.git/worktrees/<name>`, which has its own `HEAD` but no
+ * `refs/heads` at all — watching it would miss every branch update in the
+ * repository. `--path-format=absolute` (git ≥ 2.31) is what makes the result
+ * usable as a path regardless of the process's cwd; without it git may answer
+ * with a relative path.
+ */
+export async function gitCommonDir(repoRoot: string): Promise<string> {
+  const stdout = await run(repoRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  return stdout.trim();
+}
+
+/**
  * `git log --format=%H%x00%s%x00%an%x00%aI -n 100 <ref>`, split on NUL per record.
  *
  * `ref` defaults to `HEAD` so callers that predate branch selection are

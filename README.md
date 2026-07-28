@@ -119,6 +119,7 @@ m1-spike/           throwaway CDN spike that proved peek-in-diff before any real
 | `GET /api/def?name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found; multiple = ambiguous) |
 | `POST /api/index?rev=` | prewarm the symbol index for a revision |
 | `GET /api/browse?path=` | subdirectories of `path` (default: the browse root) — directory names only |
+| `GET /api/watch` | SSE stream — a `refs` event (`{headSha}`) when the repo's refs or `HEAD` change |
 
 ## Scope (MVP)
 
@@ -141,9 +142,12 @@ resizable/tree-view sidebar. The `SymbolResolver` seam keeps the resolver swappa
   deletes one.
 - The backend reads the filesystem and never writes it. Its whole filesystem surface is
   `readFile` (the Kotlin WASM grammar + `tags.scm`, once at boot), `realpath`/`stat` to validate
-  a path being registered as a repo, `readdir` to list directories for the repo picker, and
-  `existsSync`. There is no `writeFile`, `unlink`, `rm`, `rename`, or `mkdir` anywhere in
-  `packages/backend` or `packages/shared`.
+  a path being registered as a repo, `readdir` to list directories for the repo picker,
+  `existsSync`, and `fs.watch` on a repo's `.git` common dir + `.git/refs` for the `/api/watch`
+  change stream (which observes writes; it never makes them, and reads no file contents — the
+  event only says "look again", and the answer comes from `git` as usual). There is no
+  `writeFile`, `unlink`, `rm`, `rename`, or `mkdir` anywhere in `packages/backend` or
+  `packages/shared`.
 - That directory listing (`GET /api/browse`, `packages/backend/src/browse.ts`) is confined to a
   **browse root** — `CCD_BROWSE_ROOT`, defaulting to `$HOME` — and returns **directory names
   only**. Never file names, never file contents, sizes, or timestamps; entries starting with `.`
