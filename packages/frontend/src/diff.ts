@@ -61,16 +61,30 @@ export function getModifiedEditor(): monaco.editor.IStandaloneCodeEditor | null 
   return diffEditor?.getModifiedEditor() ?? null;
 }
 
+// Guards setModel against out-of-order completions. shell.ts has its own
+// epoch counter, but it cannot cover this one: openFile() only regains control
+// *after* createDiff resolves, by which point setModel has already run. So two
+// overlapping createDiff calls — a commit switch racing a cross-file F12 jump,
+// say — would both point the editor somewhere, and whichever fetch finished
+// last would win regardless of which the user asked for last.
+let diffEpoch = 0;
+
 /**
  * Fetches both sides of `path` at headSha/baseSha in parallel, builds (or
  * reuses) their models, and points the diff editor at them.
+ *
+ * Superseded calls return without touching the editor.
  */
 export async function createDiff(headSha: string, baseSha: string, path: string): Promise<void> {
   if (!diffEditor) {
     throw new Error('createDiff: call initDiff(el) before createDiff()');
   }
 
+  const e = ++diffEpoch;
   const [baseSrc, headSrc] = await Promise.all([api.file(baseSha, path), api.file(headSha, path)]);
+  // Also skips building the models: a superseded call's models would only be
+  // reachable if that path were opened again, which recreates them anyway.
+  if (e !== diffEpoch) return;
 
   const original = getOrCreateModel(`file:///${baseSha}/${path}`, baseSrc, 'kotlin');
   const modified = getOrCreateModel(`file:///${headSha}/${path}`, headSrc, 'kotlin');
