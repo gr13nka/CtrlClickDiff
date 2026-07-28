@@ -30,8 +30,13 @@
         --ccd-danger: #f85149;
         --ccd-on-badge: #0d1117;
 
-        /* Metrics */
-        --ccd-sidebar-w: 260px;
+        /* Metrics. The sidebar width is the live, draggable value (shell.ts
+           overwrites it on #app); the -min/-max pair is the clamp the drag is
+           held to, declared here so the numbers exist in exactly one place —
+           initResizer() reads them back rather than repeating them. */
+        --ccd-sidebar-w: 300px;
+        --ccd-sidebar-w-min: 220px;
+        --ccd-sidebar-w-max: 640px;
       }
 
       html, body {
@@ -45,7 +50,7 @@
          list) + diff pane, built by shell.ts's initShell(). */
       #app.ccd-app {
         display: grid;
-        grid-template-columns: var(--ccd-sidebar-w) 1fr;
+        grid-template-columns: var(--ccd-sidebar-w) 6px 1fr;
         width: 100vw;
         height: 100vh;
         font: 13px/1.4 system-ui, sans-serif;
@@ -149,6 +154,44 @@
         overflow: hidden;
         text-overflow: ellipsis;
         font: 12px ui-monospace, monospace;
+      }
+
+      /* Drag handle for the sidebar width (wired up by shell.ts's
+         initResizer). It owns its own 6px grid track instead of floating over
+         a neighbour, so the pointerdown can't be intercepted by whatever is
+         underneath — which, on the right-hand side, is Monaco. Transparent at
+         rest: the sidebar's own border-right is the seam you see, and the
+         handle only announces itself via the cursor. */
+      .ccd-resizer {
+        background: transparent;
+        cursor: col-resize;
+        /* Required for pointer-event dragging on touch/pen: without it the
+           browser claims the gesture for panning and sends pointercancel
+           instead of pointermove. */
+        touch-action: none;
+      }
+
+      .ccd-resizer:hover {
+        background: var(--ccd-border);
+      }
+
+      /* Held highlight for the whole drag. :hover alone is not enough: the
+         pointer routinely leaves the 6px track mid-drag (pointer capture keeps
+         the drag alive anyway), which would blink the seam off at exactly the
+         moment the feedback matters. */
+      body.ccd-resizing .ccd-resizer {
+        background: var(--ccd-border-strong);
+      }
+
+      /* Global drag state, set on <body> for the duration of a drag. The
+         descendant selector and !important are load-bearing rather than
+         sloppy: Monaco sets its own `cursor` on the view lines, margin and
+         scrollbars, so without overriding them the cursor flickers between
+         col-resize and text as the pointer crosses the diff. */
+      body.ccd-resizing,
+      body.ccd-resizing * {
+        cursor: col-resize !important;
+        user-select: none !important;
       }
 
       .ccd-diff-pane {
