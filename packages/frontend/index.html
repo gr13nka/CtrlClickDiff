@@ -4,22 +4,52 @@
     <meta charset="utf-8" />
     <title>CtrlClickDiff</title>
     <style>
+      :root {
+        /* Surfaces */
+        --ccd-canvas: #1e1e1e;
+        --ccd-canvas-inset: #181818;
+        --ccd-canvas-subtle: #262626;
+        --ccd-control-bg: #252525;
+
+        /* Borders */
+        --ccd-border: #333;
+        --ccd-border-strong: #3a3a3a;
+
+        /* Text */
+        --ccd-fg: #ccc;
+        --ccd-fg-muted: #888;
+        --ccd-fg-emphasis: #ddd;
+
+        /* Accent (selection) */
+        --ccd-accent-bg: #04395e;
+        --ccd-accent-fg: #fff;
+
+        /* Status (already GitHub Primer dark values) */
+        --ccd-success: #3fb950;
+        --ccd-attention: #d29922;
+        --ccd-danger: #f85149;
+        --ccd-on-badge: #0d1117;
+
+        /* Metrics */
+        --ccd-sidebar-w: 260px;
+      }
+
       html, body {
         margin: 0;
         padding: 0;
         height: 100%;
-        background: #1e1e1e;
+        background: var(--ccd-canvas);
       }
 
       /* Milestone 4 shell layout — sidebar (commit picker + changed-file
          list) + diff pane, built by shell.ts's initShell(). */
       #app.ccd-app {
         display: grid;
-        grid-template-columns: 260px 1fr;
+        grid-template-columns: var(--ccd-sidebar-w) 1fr;
         width: 100vw;
         height: 100vh;
         font: 13px/1.4 system-ui, sans-serif;
-        color: #ccc;
+        color: var(--ccd-fg);
       }
 
       .ccd-sidebar {
@@ -27,15 +57,15 @@
         flex-direction: column;
         min-width: 0;
         min-height: 0;
-        background: #181818;
-        border-right: 1px solid #333;
+        background: var(--ccd-canvas-inset);
+        border-right: 1px solid var(--ccd-border);
         overflow: hidden;
       }
 
       .ccd-picker {
         flex: 0 0 auto;
         padding: 10px 12px;
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid var(--ccd-border);
       }
 
       .ccd-label {
@@ -43,7 +73,7 @@
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        color: #888;
+        color: var(--ccd-fg-muted);
         margin-bottom: 4px;
       }
 
@@ -51,9 +81,9 @@
         width: 100%;
         box-sizing: border-box;
         padding: 4px 6px;
-        background: #252525;
-        color: #ddd;
-        border: 1px solid #3a3a3a;
+        background: var(--ccd-control-bg);
+        color: var(--ccd-fg-emphasis);
+        border: 1px solid var(--ccd-border-strong);
         border-radius: 4px;
         font: inherit;
       }
@@ -62,7 +92,7 @@
         flex: 0 0 auto;
         padding: 6px 12px;
         min-height: 1em;
-        color: #888;
+        color: var(--ccd-fg-muted);
         font-size: 12px;
       }
 
@@ -85,12 +115,12 @@
       }
 
       .ccd-file-row:hover {
-        background: #262626;
+        background: var(--ccd-canvas-subtle);
       }
 
       .ccd-file-row.active {
-        background: #04395e;
-        color: #fff;
+        background: var(--ccd-accent-bg);
+        color: var(--ccd-accent-fg);
       }
 
       .ccd-badge {
@@ -102,12 +132,12 @@
         height: 16px;
         border-radius: 3px;
         font: 700 10px/1 ui-monospace, monospace;
-        color: #0d1117;
+        color: var(--ccd-on-badge);
       }
 
-      .ccd-badge-A { background: #3fb950; }
-      .ccd-badge-M { background: #d29922; }
-      .ccd-badge-D { background: #f85149; }
+      .ccd-badge-A { background: var(--ccd-success); }
+      .ccd-badge-M { background: var(--ccd-attention); }
+      .ccd-badge-D { background: var(--ccd-danger); }
 
       /* min-width:0 is what makes the ellipsis actually render: as a flex item
          this defaults to min-width:auto, which refuses to shrink below its
