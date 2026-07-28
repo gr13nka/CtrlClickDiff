@@ -53,9 +53,10 @@ export function getOrCreateModel(uriString: string, src: string, language: strin
 
 /**
  * Returns the modified (right-hand, "head") pane's editor instance, or null
- * before initDiff() has run. Used by defprovider.ts's editor opener (to
- * reveal a jumped-to line) and by main.ts's window.__ccd debug hook (so the
- * M3 verify harness can do coordinate math against the live editor).
+ * before initDiff() has run. Exists for main.ts's window.__ccd debug hook, so
+ * the M3 verify harness can do coordinate math against the live editor.
+ * In-app positioning goes through revealLine() instead, which knows when the
+ * editor's layout is safe to scroll against.
  */
 export function getModifiedEditor(): monaco.editor.IStandaloneCodeEditor | null {
   return diffEditor?.getModifiedEditor() ?? null;
@@ -90,4 +91,66 @@ export async function createDiff(headSha: string, baseSha: string, path: string)
   const modified = getOrCreateModel(`file:///${headSha}/${path}`, headSrc, 'kotlin');
 
   diffEditor.setModel({ original, modified });
+}
+
+// A diff so slow it never arrives must degrade to "position anyway" rather
+// than swallow the jump forever.
+const DIFF_COMPUTE_TIMEOUT_MS = 1000;
+
+// setModel is synchronous but the diff behind it is not, and until it lands
+// the modified pane still carries its pre-diff line layout: none of the
+// alignment view zones that pad it against the original, and none of the
+// collapsed regions if hideUnchangedRegions is ever switched on. Scrolling
+// before that point aims at coordinates that are about to move.
+//
+// onDidUpdateDiff alone is not that signal. It's Event.fromObservableLight
+// over the diff model's `diff` observable, and a setModel walks that value
+// through result -> undefined -> newResult — so the first tick after a model
+// swap can arrive with nothing computed yet. getLineChanges() reads the same
+// observable and is null in exactly that state, which makes it the readiness
+// test; the event only says "check again".
+function whenDiffComputed(editor: monaco.editor.IStandaloneDiffEditor): Promise<void> {
+  if (editor.getLineChanges() !== null) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      sub.dispose();
+      resolve();
+    }, DIFF_COMPUTE_TIMEOUT_MS);
+
+    const sub = editor.onDidUpdateDiff(() => {
+      if (editor.getLineChanges() === null) return;
+      clearTimeout(timer);
+      sub.dispose();
+      resolve();
+    });
+  });
+}
+
+/**
+ * Positions the cursor at `line` in the modified pane and centers it, once
+ * the diff for the current model pair has actually been computed.
+ *
+ * Cursor first, reveal second — deliberately, not incidentally. With
+ * hideUnchangedRegions enabled it is the *cursor* move that expands a
+ * collapsed region: the feature listens on onDidChangeCursorPosition and
+ * calls ensureModifiedLineIsVisible from there. Revealing first would center
+ * against the un-expanded layout and let the expansion shift the line back
+ * out from under the viewport.
+ *
+ * Superseded calls return without touching the editor, on the same rule
+ * createDiff follows: the cursor belongs to whichever file the user asked for
+ * last, not to whichever jump finished waiting last.
+ */
+export async function revealLine(line: number): Promise<void> {
+  const editor = diffEditor;
+  if (!editor) return;
+
+  const e = diffEpoch;
+  await whenDiffComputed(editor);
+  if (e !== diffEpoch) return;
+
+  const modified = editor.getModifiedEditor();
+  modified.setPosition({ lineNumber: line, column: 1 });
+  modified.revealLineInCenter(line);
 }

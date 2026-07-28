@@ -22,7 +22,7 @@
 import * as monaco from 'monaco-editor';
 import type { DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
-import { getOrCreateModel } from './diff';
+import { getOrCreateModel, revealLine } from './diff';
 
 function parseModelUri(uri: monaco.Uri): { rev: string; path: string } {
   const segments = uri.path.replace(/^\/+/, '').split('/');
@@ -106,19 +106,19 @@ export function registerKotlinDefinitions(): void {
       await ccd.openPath(path);
 
       // Best-effort: land the cursor/viewport on the target line now that
-      // the modified editor's model has switched. Wrapped in try/catch —
-      // the jump itself (the file switch) already succeeded either way.
+      // the modified editor's model has switched. revealLine owns the timing
+      // and ordering this needs (see diff.ts) — openPath only guarantees the
+      // models are swapped, not that the diff behind them has been computed,
+      // and scrolling before that lands on a layout that then moves. Wrapped
+      // in try/catch — the jump itself (the file switch) already succeeded
+      // either way.
       try {
-        const editor = ccd.modifiedEditor;
         const line = selectionOrPosition
           ? 'lineNumber' in selectionOrPosition
             ? selectionOrPosition.lineNumber
             : selectionOrPosition.startLineNumber
           : undefined;
-        if (editor && line !== undefined) {
-          editor.revealLineInCenter(line);
-          editor.setPosition({ lineNumber: line, column: 1 });
-        }
+        if (line !== undefined) await revealLine(line);
       } catch (err) {
         console.error('[ccd] editor opener: reveal failed', err);
       }
