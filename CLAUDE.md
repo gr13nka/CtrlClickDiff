@@ -12,13 +12,17 @@ no build step**, and `packages/shared` is consumed as raw `.ts` source (`"export
 `tsconfig.base.json` sets `noEmit`, so `tsc` is purely a checker here.
 
 ```
-packages/shared     wire types + the SymbolResolver contract
+packages/shared     git-types.ts (git wire shapes) repo-types.ts (registry + browse shapes)
+                    types.ts (the SymbolResolver contract, documented on the interface)
 packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (what a commit
                     selection means) repos.ts browse.ts watch.ts
                     resolver/TreeSitterResolver.ts (tree-sitter symbol index)
 packages/frontend   Vite + Monaco. shell.ts (all UI state) diff.ts defprovider.ts api.ts
                     topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
-                    filetree.ts repopicker.ts live.ts theme.ts; ALL CSS is inline in index.html
+                    filetree.ts repopicker.ts live.ts theme.ts
+                    modal.ts (backdrop/aria/Escape for all three dialogs)
+                    storage.ts (the one guarded localStorage) resizer.ts (the sidebar seam)
+                    ALL CSS is inline in index.html
 vendor/             prebuilt tree-sitter-kotlin.wasm (no upstream prebuild exists)
 fixtures/           make-sample-repo.sh — generates the two test repos
 m1-spike/           throwaway CDN spike, kept as historical evidence. Not built or tested.
@@ -26,9 +30,12 @@ m1-spike/           throwaway CDN spike, kept as historical evidence. Not built 
 
 `shell.ts` is the spine: it owns every piece of frontend state and nearly every change touches
 it. New logic belongs in its own module with a small interface, so `shell.ts` gains a call site
-rather than another screenful. The header, both palettes and the repo picker each follow that
-rule — `topbar.ts` in particular knows nothing about repos, branches or commits, because its
-interface is `setCrumbs(Crumb[])` and a crumb is only a label, a tooltip and a click handler.
+rather than another screenful. The header, both palettes, the repo picker and the sidebar
+resizer each follow that rule — `topbar.ts` in particular knows nothing about repos, branches
+or commits, because its interface is `setCrumbs(Crumb[])` and a crumb is only a label, a
+tooltip and a click handler. The rule applies to what is *already* in `shell.ts` too: the
+resizer lived at its foot for a long time behind a comment claiming self-containment, and
+moving it to `resizer.ts` is what made a module boundary enforce the claim.
 
 The unit of review is a **selection of commits**, not a commit. One commit selected is the
 ordinary case; several is a "ghost squash" (see below). There is deliberately no second code
@@ -47,7 +54,16 @@ bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
 Behaviour is verified **in a real browser**. Most of what matters here — peek rendering inside
 a diff, region auto-expansion on a jump, drag-resize relayout — has no meaningful assertion
 outside one. Drive Chromium over CDP; Node 22 has a global `WebSocket`, so this needs no
-dependencies. Note snap-confined Chromium needs `--no-sandbox` and a profile dir it can reach.
+dependencies. Note snap-confined Chromium needs `--no-sandbox` and a profile dir it can reach —
+and `~/.cache` is **not** one of them: it fails to create `SingletonLock` and aborts before the
+debugger ever binds, so the failure looks like "chromium never came up" rather than a permission
+error. Use a `mkdtemp` under `~/snap/chromium/common/`.
+
+Two CDP details that cost time: a poll that straddles a `Page.reload` rejects with *"Inspected
+target navigated or closed"*, which is normal and must be swallowed rather than treated as a
+failure; and a modal driven by two separate `Runtime.evaluate` round trips is not the same test
+as one driven by a single evaluate — an in-flight fetch can land in the gap and repaint what you
+were about to click. Where a race is the thing under test, do the whole gesture in one evaluate.
 
 **Peek can only be tested by the gesture.** `editor.getAction('editor.action.revealDefinition')`
 returns **null** in this standalone Monaco build — the only definition-ish action it registers is
@@ -93,6 +109,30 @@ model, so it fires on every transition including `result → undefined` during a
 readiness check is `getLineChanges() !== null`. Also: cursor move *before* reveal — it is
 `onDidChangeCursorPosition` that expands a collapsed region, so revealing first computes a
 scroll against a layout that is about to move.
+
+**`switchRepo` clears the outgoing repo's state BEFORE `adoptRepo`, and the order is the point.**
+`adoptRepo` sets `repo` and calls `renderTrail()` **synchronously**, and `renderTrail` decides
+which crumbs exist by reading `branches`/`selectedRef`/`commits`/`selection`. Clearing after it
+paints the new repository's name beside the previous one's branch and commit selection, and
+nothing repaints until `loadBranches` returns a round trip later. Measured over CDP with 1500ms
+of emulated latency, switching from a repo parked on `feature/wide`: the header read
+`["ccd-sample-repo-2", "feature/wide", "4221baf · …"]` where it should read one crumb. Note the
+stale crumbs cannot leak an old refname into a new-repo request — everything is cleared in the
+same synchronous turn, so a click in that window opened a palette of 0 rows — but a crumb that
+opens an empty palette is the affordance-that-lies hazard `renderTrail` already guards against
+for the selection crumb.
+
+**`modelUri` and `parseModelUri` are an inverse pair and live together in `diff.ts`.** Splitting
+them (the parse used to sit in `defprovider.ts`) makes the segment layout a two-file edit whose
+half-done version fails **silently at runtime** — cross-file peek just stops rendering — and
+never at typecheck. Same reasoning as `initResizer` reading its clamp bounds back from CSS
+instead of retyping them.
+
+**`COMMIT_LOG_LIMIT` is exported from `git.ts` and is the selection cap too.** A selection is
+assembled out of commits the picker listed, so the log's page size *is* the ceiling
+`/api/preview` enforces. These were two independent literal `100`s tied together only by a
+comment; raising one without the other would have silently offered commits a selection was not
+allowed to name.
 
 **Do not watch `.git` recursively.** On Linux that is one inotify watch per subdirectory and
 `.git/objects/` alone is 256 fanout dirs. `watch.ts` uses two narrow watchers (the git common
@@ -158,14 +198,29 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   selection is a deliberate act, and "the tip moved" says nothing about whether the new commit
   belongs in a set assembled by hand. The single-commit rule is unchanged and has its own
   reasoning in `refreshRefs`.
-- **The two palettes do not share an abstraction, and that was measured, not assumed.** What
-  `commitpalette.ts` and `branchpalette.ts` actually share is a backdrop, an Escape handler and a
-  clamped active index — about 40 lines, and the part least likely to change. The rows are
-  different shapes, the searches match different fields, and choosing means different things (a
-  selection that may hold several commits, against a single ref). A generic palette taking row
-  renderers, a search projection, group predicates and footer slots is more code than the
-  duplication it removes. The revisit trigger is a **third** palette; the full argument is at the
-  foot of `branchpalette.ts`.
+- **The two palettes still do not share a palette abstraction — but all three dialogs share a
+  modal shell.** The distinction is the whole point. `modal.ts` owns the backdrop, the labelled
+  `role=dialog` panel, the click-outside guard and the capture-phase Escape handler, and it
+  handles Escape then hands every other key straight through. It owns **nothing** else: no row
+  renderer, no search projection, no group predicate, no footer slot, and deliberately not the
+  active index, the clamp or the scroll-into-view either — sharing those would need the shell to
+  know each palette's `visible.length` and to call back into its renderer. The rows are still
+  different shapes, the searches still match different fields, and choosing still means different
+  things (a selection that may hold several commits, against a single ref).
+  What triggered extracting the shell was not a third palette but a third *modal* (the repo
+  picker) plus evidence the duplication had stopped being harmless: the three hand-written copies
+  had drifted, two capturing Escape and consuming it while `repopicker.ts` bubbled and did not.
+  The revisit trigger for the palette itself is unchanged — a **third palette**. The full
+  argument, amended rather than replaced, is at the foot of `branchpalette.ts`.
+- **One guarded `localStorage`, and it is guarded because the property access itself throws.**
+  `storage.ts` is the only file that touches the API; in some privacy modes referencing
+  `localStorage` raises a SecurityError before `getItem` is ever reached, so the access must be
+  *inside* the try. It exports exactly `readStored`/`writeStored`/`removeStored`, all string-typed.
+  Do not add `readNumber` or `readJson<T>(key, guard)`: each would have one caller and would drag
+  that caller's decision into everybody's module — the resizer's blank-string guard exists so
+  corrupt storage falls back to the *stylesheet* default rather than to 220px, and the recents
+  validator exists because an older shape of this app may have written that key. Keys stay at
+  their call sites, beside the value they name; `storage.ts` knows none of them.
 - **Repo scoping is stateless.** There is no "current repo" on the server; every data route
   takes `?repo=<id>`. That is what removes cache invalidation, cross-tab interference, and the
   restart-to-switch problem in one move. The registry is an append-only *validated-path* store,
