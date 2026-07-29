@@ -10,7 +10,7 @@
 
 import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
-import { initDiff, createDiff } from './diff';
+import { initDiff, createDiff, isSideBySide, setRenderSideBySide } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
@@ -178,7 +178,7 @@ export function initShell(rootEl: HTMLElement): void {
   list.className = 'ccd-file-list';
   fileListEl = list;
 
-  sidebar.append(repoBar, branchPicker, picker, status, list);
+  sidebar.append(repoBar, branchPicker, picker, buildToolbar(), status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
   // #app.ccd-app). The tooltip is the only place the double-click reset is
@@ -197,6 +197,75 @@ export function initShell(rootEl: HTMLElement): void {
   initDiff(diffPane);
 
   void boot();
+}
+
+// ---------------------------------------------------------------------------
+// View-options toolbar
+//
+// Controls for *how* the diff pane renders, as opposed to what it renders —
+// which is why the row sits below the repo/branch/commit pickers and above the
+// file list: everything above it narrows the subject, everything below it is
+// the subject, and these apply to all of it equally.
+//
+// The state itself is deliberately not mirrored here. diff.ts owns each
+// preference, persists it and restores it, and the controls below read it back
+// — so there is no second copy of "which mode are we in" to drift from the
+// editor's, and nothing here has to repeat the localStorage restore to render
+// correctly on the first paint.
+// ---------------------------------------------------------------------------
+
+function buildToolbar(): HTMLElement {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'ccd-toolbar';
+  toolbar.append(layoutToggle());
+  return toolbar;
+}
+
+/**
+ * Side-by-side / Inline as a two-button segmented control.
+ *
+ * A segmented control rather than a checkbox because neither layout is the
+ * negation of the other in the reader's head — "Inline" unchecked does not say
+ * "side-by-side", it says nothing — and both names fit at the 220px minimum
+ * sidebar width.
+ *
+ * `aria-pressed` is the only record of which segment is selected: index.html
+ * styles the selection off that same attribute, so the button that looks
+ * pressed is by construction the one a screen reader is told is pressed.
+ */
+function layoutToggle(): HTMLElement {
+  const group = document.createElement('div');
+  group.className = 'ccd-segmented';
+  group.role = 'group';
+  group.ariaLabel = 'Diff layout';
+
+  const segments = [
+    { label: 'Side-by-side', sideBySide: true },
+    { label: 'Inline', sideBySide: false }
+  ].map((spec) => {
+    const button = document.createElement('button');
+    button.className = 'ccd-segment';
+    button.type = 'button';
+    button.textContent = spec.label;
+    group.append(button);
+    return { button, sideBySide: spec.sideBySide };
+  });
+
+  const sync = (): void => {
+    for (const segment of segments) {
+      segment.button.ariaPressed = String(segment.sideBySide === isSideBySide());
+    }
+  };
+
+  for (const segment of segments) {
+    segment.button.addEventListener('click', () => {
+      setRenderSideBySide(segment.sideBySide);
+      sync();
+    });
+  }
+
+  sync();
+  return group;
 }
 
 /**

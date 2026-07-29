@@ -156,6 +156,68 @@
         font: inherit;
       }
 
+      /* View-options row (shell.ts's buildToolbar) — how the diff pane renders,
+         as opposed to what it renders. Deliberately smaller than the pickers
+         above it: it is set once and then ignored, so it gets 11px labels and
+         no label row of its own.
+
+         It wraps rather than scrolls or ellipsises, because the sidebar can be
+         dragged down to 220px and a half-visible control is an unusable one: a
+         control that no longer fits beside its neighbour drops to the next
+         line, which costs height the file list can spare. */
+      .ccd-toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--ccd-border);
+      }
+
+      /* One border around the pair rather than one each, so the two buttons
+         read as a single control with two states instead of two independent
+         actions. overflow:hidden is what lets the outer radius clip the square
+         corners of the segments inside it. */
+      .ccd-segmented {
+        flex: 0 0 auto;
+        display: flex;
+        border: 1px solid var(--ccd-border-strong);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .ccd-segment {
+        padding: 3px 8px;
+        background: var(--ccd-control-bg);
+        color: var(--ccd-fg-muted);
+        border: 0;
+        font: 11px/1.4 system-ui, sans-serif;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+
+      /* The seam between the segments. On the second one only, so the group's
+         own left border is not doubled. */
+      .ccd-segment + .ccd-segment {
+        border-left: 1px solid var(--ccd-border-strong);
+      }
+
+      .ccd-segment:hover {
+        background: var(--ccd-canvas-subtle);
+        color: var(--ccd-fg-emphasis);
+      }
+
+      /* Selection is styled off aria-pressed rather than a class of its own:
+         shell.ts writes exactly one attribute per segment, so the button that
+         looks selected cannot disagree with the one screen readers are told is.
+         After the :hover rule on purpose — equal specificity, so this wins for
+         a pressed segment under the cursor. */
+      .ccd-segment[aria-pressed='true'] {
+        background: var(--ccd-accent-bg);
+        color: var(--ccd-accent-fg);
+      }
+
       .ccd-status {
         flex: 0 0 auto;
         padding: 6px 12px;

@@ -21,6 +21,80 @@ const PEEK_OPTIONS: monaco.editor.IEditorOptions = {
   }
 };
 
+// ---------------------------------------------------------------------------
+// View preferences
+//
+// How the diff renders is decided in two places that have to agree: the option
+// bag createDiffEditor is constructed with, and every updateOptions() after it.
+// Both read viewOptions() rather than being kept in step by hand — which is
+// what makes a mode restored from localStorage take effect on the very first
+// paint instead of flipping a frame after it, and what makes a new preference
+// one field in one object rather than an edit at each site.
+// ---------------------------------------------------------------------------
+
+const DIFF_MODE_KEY = 'ccd.diffMode';
+
+// True for Monaco's two-pane layout, false for the one-column inline one, which
+// renders deletions as view zones above the lines that replaced them. Anything
+// but the exact string 'inline' — unset, blocked storage, hand-edited garbage —
+// reads as side-by-side, which is the default.
+let sideBySide = readPref(DIFF_MODE_KEY) !== 'inline';
+
+/** The editor options the current preferences add up to. */
+function viewOptions(): monaco.editor.IDiffEditorOptions {
+  return { renderSideBySide: sideBySide };
+}
+
+/** No-op before initDiff(): the construction option bag carries the same values. */
+function applyViewOptions(): void {
+  diffEditor?.updateOptions(viewOptions());
+}
+
+/** Whether the diff is rendering side-by-side. For the sidebar's toggle. */
+export function isSideBySide(): boolean {
+  return sideBySide;
+}
+
+/**
+ * Switches between the side-by-side and inline layouts, and remembers which.
+ *
+ * DO NOT reimplement this by disposing and re-creating the diff editor. Monaco
+ * flips renderSideBySide on a live instance perfectly well, and a re-created
+ * editor would come up without PEEK_OPTIONS: those are applied to the two inner
+ * editors *after* construction precisely because they do not propagate from
+ * createDiffEditor's option bag (see initDiff). Nothing would throw and nothing
+ * on screen would look wrong — Ctrl+click would just silently stop peeking,
+ * which is the one feature this tool is named after.
+ */
+export function setRenderSideBySide(next: boolean): void {
+  sideBySide = next;
+  writePref(DIFF_MODE_KEY, next ? 'side-by-side' : 'inline');
+  applyViewOptions();
+}
+
+// localStorage is guarded on every access, not just on parse: in some privacy
+// modes the *property access itself* throws a SecurityError, so an unguarded
+// read during module evaluation would take the app down before it drew
+// anything. A remembered view mode is a convenience; it never gets to be the
+// reason the app fails to start. (The same rule shell.ts's sidebar width
+// follows, for the same reason.)
+
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* blocked or full storage: the preference just won't survive the reload */
+  }
+}
+
 /**
  * Creates the DiffEditor once on `el` and returns it. Safe to call more than
  * once (e.g. from a re-render) — later calls return the existing instance
@@ -32,7 +106,11 @@ export function initDiff(el: HTMLElement): monaco.editor.IStandaloneDiffEditor {
   diffEditor = monaco.editor.createDiffEditor(el, {
     automaticLayout: true,
     readOnly: true,
-    renderSideBySide: true
+    // Spread rather than restated, so the persisted preferences are already in
+    // force on the first render. Passing them only through updateOptions would
+    // paint one frame in the default mode and then flip out from under the
+    // reader.
+    ...viewOptions()
   });
 
   diffEditor.getOriginalEditor().updateOptions(PEEK_OPTIONS);
