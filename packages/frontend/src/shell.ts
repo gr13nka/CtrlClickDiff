@@ -294,8 +294,17 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
   if (repo?.id === entry.id) return;
 
   beginEpoch();
-  adoptRepo(entry);
 
+  // Cleared BEFORE adoptRepo, which is not tidiness. adoptRepo repaints the
+  // breadcrumb synchronously, and renderTrail() reads the bindings below to
+  // decide which crumbs exist. Clearing after it leaves the header naming the
+  // new repository beside the *previous* one's branch and commit selection
+  // until loadBranches lands, a full round trip later — and both of those
+  // crumbs are clickable throughout, opening the empty palettes this block has
+  // already produced. shell's own rule for the selection crumb says why that is
+  // not survivable: a crumb that opens an empty palette is an affordance that
+  // lies.
+  //
   // Collapse state is keyed by directory path, and those paths describe a tree
   // that does not exist in the new repo.
   resetFileTreeState();
@@ -313,6 +322,8 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
   // and `refs/heads/main` naming a branch in both repos is a coincidence, not a
   // reason to open the new repo on it. loadRepoRefs() picks the new repo's HEAD.
   selectedRef = '';
+
+  adoptRepo(entry);
 
   await loadRepoRefs();
 }
