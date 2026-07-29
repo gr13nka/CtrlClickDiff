@@ -12,6 +12,7 @@ import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo } from '@ctrlclic
 import { api, type ReposListing, type RepoEntry } from './api';
 import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
+import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
 
 // The repository every request below is scoped to. Null only before boot()
@@ -257,11 +258,39 @@ async function preferredRepo(listing: ReposListing): Promise<RepoEntry | null> {
   return listing.repos.find((r) => r.id === listing.defaultRepoId) ?? null;
 }
 
-/** Makes `entry` the current repo, in state, in recents and on screen. */
+/** Makes `entry` the current repo, in state, in recents, on screen and on the wire. */
 function adoptRepo(entry: RepoEntry): void {
   repo = entry;
   rememberRecent(entry);
   renderRepoBar();
+  connectLive();
+}
+
+// The watch stream for the current repo, or null before boot has resolved one.
+let live: LiveStream | null = null;
+
+/**
+ * Points the watch stream at the current repo, closing whatever it was on.
+ *
+ * Closing first is not tidiness. An EventSource that is merely dropped keeps its
+ * connection open and keeps delivering, so a repo switch would leave the old
+ * repo's stream alive — and every commit in a repository the user has left would
+ * refresh the sidebar of the one they are looking at, against a ref list that
+ * has nothing to do with it.
+ */
+function connectLive(): void {
+  live?.close();
+  live = null;
+
+  const repoId = repo?.id;
+  if (!repoId) return;
+
+  live = watchRepo(repoId, () => {
+    // close() stops delivery, but an event already queued when it ran can still
+    // arrive here. Cheap to check, and the alternative is a cross-repo refresh.
+    if (repo?.id !== repoId) return;
+    void refreshRefs();
+  });
 }
 
 /**
@@ -417,10 +446,7 @@ function renderBranchOptions(branches: BranchInfo[]): void {
   const select = branchSelectEl;
   if (!select) return;
 
-  // Repopulate, don't append — the same rule loadCommits() follows below, and
-  // for the same reason: this runs again on every repo switch.
-  select.innerHTML = '';
-
+  const options = document.createDocumentFragment();
   for (const kind of ['local', 'remote'] as const) {
     const group = branches.filter((b) => b.kind === kind).sort(byHeadThenName);
     // A repo with no remote configured has no remote refs, and an empty
@@ -436,8 +462,10 @@ function renderBranchOptions(branches: BranchInfo[]): void {
       opt.title = branch.ref;
       optgroup.appendChild(opt);
     }
-    select.appendChild(optgroup);
+    options.appendChild(optgroup);
   }
+
+  replaceOptions(select, options);
 }
 
 function byHeadThenName(a: BranchInfo, b: BranchInfo): number {
@@ -475,6 +503,75 @@ function commitOptionLabel(commit: CommitInfo): string {
 }
 
 /**
+ * Repopulates the commit <select> with `commits`, newest first, plus `pinned` if
+ * the caller has a selection the log no longer contains (see pinnedFor).
+ *
+ * The pinned entry goes last and inside its own `<optgroup label="Selected">`.
+ * Last, so `options[0]` is still the tip for anyone asking; and in a group of its
+ * own because appending it silently to a newest-first list would assert
+ * something false — that it is the oldest commit on this branch, when it may not
+ * be on the branch at all.
+ */
+function renderCommitOptions(commits: CommitInfo[], pinned: PinnedCommit | null): void {
+  const select = commitSelectEl;
+  if (!select) return;
+
+  const options = document.createDocumentFragment();
+  for (const commit of commits) {
+    options.appendChild(commitOption(commit.sha, commitOptionLabel(commit)));
+  }
+  if (pinned) {
+    const group = document.createElement('optgroup');
+    group.label = 'Selected';
+    group.appendChild(commitOption(pinned.sha, pinned.label));
+    options.appendChild(group);
+  }
+
+  replaceOptions(select, options);
+}
+
+function commitOption(sha: string, label: string): HTMLOptionElement {
+  const opt = document.createElement('option');
+  opt.value = sha;
+  opt.textContent = label;
+  // A <select> clips its text rather than wrapping it, and what gets clipped is
+  // the subject — the one part of the row that is not recoverable from anywhere
+  // else on screen.
+  opt.title = label;
+  return opt;
+}
+
+/**
+ * Swaps `select`'s contents for `options`, unless they are already identical.
+ *
+ * Repopulate, don't append: this runs again on every repo switch, every branch
+ * switch and every refs event, and appending would stack one ref's log under the
+ * last one's.
+ *
+ * The no-op case is what makes a refs event cheap enough to be frequent. Most of
+ * them change one ref and leave every option this picker shows untouched, and
+ * rebuilding a <select> anyway is not free to the user: it closes the dropdown if
+ * they have it open, and drops the keyboard type-ahead they were in the middle
+ * of. Comparing what is on screen with what is about to be is a few string
+ * concatenations, and it is done against the live DOM rather than a remembered
+ * signature so there is no second copy of "what is rendered" to drift.
+ */
+function replaceOptions(select: HTMLSelectElement, options: DocumentFragment): void {
+  if (optionsSignature(options) === optionsSignature(select)) return;
+  select.replaceChildren(options);
+}
+
+/** Everything a reader of the <select> could tell apart: group, value, text. */
+function optionsSignature(root: ParentNode): string {
+  return [...root.querySelectorAll('option')]
+    .map((opt) => {
+      const group = opt.parentElement instanceof HTMLOptGroupElement ? opt.parentElement.label : '';
+      return `${group} ${opt.value} ${opt.textContent ?? ''}`;
+    })
+    .join('');
+}
+
+/**
  * Fills the commit picker from `selectedRef`'s log and opens its newest commit.
  * Reads the <select> from module state rather than taking it as an argument: it
  * is called from boot(), from every repo switch and from every branch switch,
@@ -508,24 +605,123 @@ async function loadCommits(): Promise<void> {
     return;
   }
 
-  // Repopulate, don't append: every repo switch and every branch switch calls
-  // this again, and appending would stack this ref's log under the last one's.
-  select.innerHTML = '';
-  for (const commit of commits) {
-    const opt = document.createElement('option');
-    opt.value = commit.sha;
-    opt.textContent = commitOptionLabel(commit);
-    // A <select> clips its text rather than wrapping it, and what gets clipped
-    // is the subject — the one part of the row that is not recoverable from
-    // anywhere else on screen.
-    opt.title = opt.textContent;
-    select.appendChild(opt);
-  }
+  renderCommitOptions(commits, null);
 
   const newest = commits[0];
   if (!newest) return; // unreachable (length checked above); narrows for TS
   select.value = newest.sha;
   await selectCommit(newest.sha);
+}
+
+/**
+ * Re-reads branches and commits after the watcher said the repository's refs
+ * moved, keeping the user where they are wherever that is still possible.
+ *
+ * Claims a fresh epoch like any other entry point: this can land in the middle
+ * of a commit or file load, and the two must not both write the sidebar. What it
+ * must *not* do is leave the user's own in-flight action half-applied, so the
+ * decision to reload the file list below is made against `headSha` — the commit
+ * actually rendered — rather than against the previous selection. If a
+ * selectCommit() was abandoned by this very epoch, `headSha` still holds the old
+ * commit and this refresh finishes the job the user started.
+ *
+ * Failures are logged, not put on the status line. The user did not ask for this
+ * refresh; taking over the status line to report that a background poll failed
+ * would replace whatever they *are* waiting on with an error about something
+ * they never did. The next refs event retries anyway.
+ */
+async function refreshRefs(): Promise<void> {
+  const branchSelect = branchSelectEl;
+  const commitSelect = commitSelectEl;
+  if (!branchSelect || !commitSelect) return;
+
+  // Captured before the first await, because every decision below is about
+  // where the user *was* when the event arrived.
+  const previous = {
+    ref: selectedRef,
+    sha: commitSelect.value,
+    // The log is newest-first, and a pinned option is appended after it, so the
+    // first option is the tip of the ref as it was last listed.
+    tipSha: commitSelect.options[0]?.value ?? '',
+    label: commitSelect.selectedOptions[0]?.textContent ?? '',
+  };
+
+  const e = beginEpoch();
+
+  let branches: BranchInfo[];
+  try {
+    branches = await api.branches(requireRepoId());
+  } catch (err) {
+    if (!stale(e)) console.warn(`[ccd] live refresh: branches failed: ${errorMessage(err)}`);
+    return;
+  }
+  if (stale(e)) return;
+
+  // A branch can vanish under the user — deleted, renamed, or pruned by a fetch
+  // — and there is then nothing to keep them on. HEAD's branch is the fallback
+  // because it is the same answer a fresh load would give.
+  const target = branches.find((b) => b.ref === previous.ref) ?? branches.find((b) => b.isHead);
+  if (!target) return;
+  renderBranchOptions(branches);
+  selectedRef = target.ref;
+  branchSelect.value = target.ref;
+
+  let commits: CommitInfo[];
+  try {
+    commits = await api.commits(requireRepoId(), selectedRef);
+  } catch (err) {
+    if (!stale(e)) console.warn(`[ccd] live refresh: commits failed: ${errorMessage(err)}`);
+    return;
+  }
+  if (stale(e)) return;
+  const newest = commits[0];
+  if (!newest) return;
+
+  // FOLLOW HEAD ONLY FROM THE TIP. Someone sitting on the tip is watching the
+  // branch and wants the new commit; someone sitting on an older commit is
+  // reviewing it, and moving them would replace the diff they are reading —
+  // possibly mid-file, possibly mid-thought — with a different one they never
+  // asked for, and give them no way to know what they were just looking at.
+  // Being late to a new commit costs a click; being yanked off an old one costs
+  // the review. The user is also moved when the ref itself changed underneath
+  // them, since their old selection belongs to a branch that is no longer shown.
+  const followTip =
+    target.ref !== previous.ref || previous.sha === '' || previous.sha === previous.tipSha;
+  const selection = followTip ? newest.sha : previous.sha;
+
+  renderCommitOptions(commits, pinnedFor(selection, previous.label, commits));
+  commitSelect.value = selection;
+
+  // Against headSha, not against previous.sha: this is "is the file list showing
+  // the selected commit", which is the question that decides whether it has to
+  // be rebuilt at all — and it is also true when nothing moved but the user's
+  // own commit load was abandoned by this epoch.
+  if (selection !== headSha) await selectCommit(selection);
+}
+
+/**
+ * The <option> a refreshed commit list must carry that its own log does not:
+ * the user's selection, when the new log no longer contains it.
+ *
+ * A branch's log is capped at 100 commits, so a review that sits on an old
+ * commit while the branch moves will eventually see that commit fall off the
+ * end; a force-push or a reset can drop it sooner. Either way the alternative to
+ * pinning is that `select.value = <sha not in the list>` silently selects
+ * nothing, and the control then reads as some *other* commit — the picker would
+ * be lying about what the diff pane is showing.
+ *
+ * Its label is carried over from the option being replaced rather than looked up
+ * again: the commit is by definition not in anything we just fetched, and its
+ * old row already says exactly the right thing.
+ */
+function pinnedFor(sha: string, label: string, commits: CommitInfo[]): PinnedCommit | null {
+  if (commits.some((c) => c.sha === sha)) return null;
+  return { sha, label };
+}
+
+interface PinnedCommit {
+  sha: string;
+  label: string;
 }
 
 /**
