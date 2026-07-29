@@ -361,7 +361,10 @@ function renderTrail(): void {
   if (commits.length > 0 || selection.length > 0) {
     crumbs.push({
       key: 'selection',
-      icon: '◇',
+      // The ghost is the standing reminder that what is on screen is not a
+      // commit. A reviewer who forgets that could quote a sha for a diff no sha
+      // produces.
+      icon: selection.length > 1 ? '👻' : '◇',
       label: selectionLabel(),
       title: selectionTitle(),
       onClick: () =>
@@ -387,7 +390,14 @@ function selectionLabel(): string {
 /** Every selected commit, one per line — the crumb only has room for a count. */
 function selectionTitle(): string {
   if (selection.length === 0) return 'Click to choose a commit';
-  return selection.map((c) => `${c.sha.slice(0, 7)} · ${c.subject}`).join('\n');
+  const lines = selection.map((c) => `${c.sha.slice(0, 7)} · ${c.subject}`).join('\n');
+  if (selection.length === 1) return lines;
+  // Says it out loud rather than leaving the ghost glyph to carry it: this is
+  // the tooltip of the control that names what the diff pane is showing, and
+  // what it is showing is not any commit in this list.
+  const impure = files.filter((f) => f.skippedShas.length > 0).length;
+  const caveat = impure === 0 ? '' : `\n${impure} file(s) marked ⚠ — see the file list.`;
+  return `Ghost squash of ${selection.length} commits (nothing is rewritten):\n${lines}${caveat}`;
 }
 
 /**
@@ -848,6 +858,23 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
   pathEl.textContent = node.name;
 
   row.append(badge, pathEl);
+
+  // The one place the preview admits it is not exactly what was asked for. A
+  // file edited by both a selected and an unselected commit has no two-SHA
+  // representation that excludes the unselected edits, so they are in this
+  // file's diff — and saying so is the difference between a reviewer trusting
+  // the tool and a reviewer being quietly misled about what they just read.
+  if (node.skippedShas.length > 0) {
+    const warn = document.createElement('span');
+    warn.className = 'ccd-file-warn';
+    warn.textContent = '⚠';
+    warn.title = describeSkipped(node.skippedShas);
+    row.append(warn);
+    // On the row too, so hovering anywhere along it explains the mark rather
+    // than requiring the reader to find the glyph.
+    row.title = `${node.path}\n\n${warn.title}`;
+  }
+
   row.addEventListener('click', () => {
     openFile(node.path).catch((err: unknown) => {
       setStatus(`Error loading diff: ${errorMessage(err)}`);
@@ -856,6 +883,30 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
 
   rowsByPath.set(node.path, row);
   return row;
+}
+
+/**
+ * The ⚠ tooltip: which unselected commits also touched this file.
+ *
+ * Named, not counted. "Also contains 1 unselected commit" tells the reviewer
+ * something is wrong without telling them what to do about it; naming the commit
+ * lets them decide whether to tick it and see the file honestly, or to read on
+ * knowing exactly whose change they are looking at.
+ *
+ * Subjects are looked up in the current log, which will usually have them. A sha
+ * that is not in it — a commit older than the 100 the log carries — still gets
+ * named by its sha, because a partial answer here beats no mark at all.
+ */
+function describeSkipped(shas: string[]): string {
+  const named = shas.map((sha) => {
+    const known = commits.find((c) => c.sha === sha);
+    return known ? `${sha.slice(0, 7)} · ${known.subject}` : sha.slice(0, 7);
+  });
+  const lead =
+    named.length === 1
+      ? 'This diff also contains a change from a commit you did not select:'
+      : `This diff also contains changes from ${named.length} commits you did not select:`;
+  return `${lead}\n${named.map((n) => `  • ${n}`).join('\n')}\n\nNo revision holds this file with your commits and without theirs.`;
 }
 
 function highlightActiveRow(): void {

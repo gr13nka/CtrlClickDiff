@@ -519,6 +519,79 @@
         color: var(--ccd-fg-muted);
       }
 
+      /* Ghost squash mode row — between the search box and the list, because it
+         changes what clicking a row means and the reader has to meet it before
+         they click one. */
+      .ccd-palette-mode {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--ccd-border);
+      }
+
+      .ccd-ghost-toggle {
+        padding: 3px 10px;
+        background: var(--ccd-control-bg);
+        color: var(--ccd-fg-muted);
+        border: 1px solid var(--ccd-border);
+        border-radius: 999px;
+        font: 11px/1.5 system-ui, sans-serif;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .ccd-ghost-toggle:hover {
+        color: var(--ccd-fg-emphasis);
+      }
+
+      /* Armed state is accent-filled, unlike the header's view toggles: this one
+         changes what the app is showing, not how it is drawn, and it has to be
+         legible at a glance from across the panel. */
+      .ccd-ghost-toggle[aria-pressed='true'] {
+        background: var(--ccd-accent-bg);
+        color: var(--ccd-accent-fg);
+        border-color: var(--ccd-accent-bg);
+      }
+
+      .ccd-info-btn {
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        background: transparent;
+        color: var(--ccd-fg-muted);
+        border: 0;
+        border-radius: 50%;
+        font-size: 12px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .ccd-info-btn:hover {
+        color: var(--ccd-fg-emphasis);
+        background: var(--ccd-hover);
+      }
+
+      .ccd-palette-mode-hint {
+        color: var(--ccd-fg-muted);
+        font-size: 11px;
+      }
+
+      /* white-space: pre-line so the paragraph breaks written into the string
+         survive — the explainer is three points, not one run-on sentence. */
+      .ccd-palette-explainer {
+        flex: 0 0 auto;
+        margin: 0;
+        padding: 10px 14px;
+        background: var(--ccd-canvas-inset);
+        border-bottom: 1px solid var(--ccd-border);
+        color: var(--ccd-fg-muted);
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-line;
+      }
+
       .ccd-palette-list {
         flex: 1 1 auto;
         margin: 0;
@@ -526,6 +599,45 @@
         list-style: none;
         overflow-y: auto;
         min-height: 0;
+      }
+
+      /* Ghost mode gives every row a tick column ahead of the sha. Declared on
+         the panel rather than the row so one class flip re-columns the whole
+         list, and so a row cannot end up with a box and no column for it. */
+      .ccd-palette.ghost .ccd-palette-row {
+        grid-template-columns: 16px 7ch minmax(0, 1fr) auto;
+      }
+
+      .ccd-palette-tick {
+        width: 13px;
+        height: 13px;
+        box-sizing: border-box;
+        align-self: center;
+        border: 1px solid var(--ccd-border-strong);
+        border-radius: 3px;
+      }
+
+      /* Drawn from the row's .selected class, so the box that looks ticked
+         cannot disagree with the row that is — there is no second copy of the
+         state to keep in step. */
+      .ccd-palette-row.selected .ccd-palette-tick {
+        background: var(--ccd-accent-bg);
+        border-color: var(--ccd-accent-bg);
+      }
+
+      /* The check itself: two adjacent borders on an empty box, rotated 45deg,
+         which is the one construction that gives a real tick's short-then-long
+         stroke. Drawn rather than typed so it cannot be selected, copied, or
+         read out as text — the row's aria-selected already states it. */
+      .ccd-palette-row.selected .ccd-palette-tick::after {
+        content: '';
+        display: block;
+        width: 3px;
+        height: 7px;
+        margin: 0 auto;
+        border: solid var(--ccd-accent-fg);
+        border-width: 0 2px 2px 0;
+        transform: translateY(-1px) rotate(45deg);
       }
 
       /* Grid, not flex: the sha column is fixed so every row's subject starts at
@@ -627,6 +739,16 @@
         min-width: 0;
         color: var(--ccd-fg-muted);
         font-size: 11px;
+      }
+
+      /* The ⚠ on a changed-file row: this file's diff carries edits from commits
+         the reviewer left out. Attention amber rather than danger red — nothing
+         is broken, the preview is simply wider than what was asked for. */
+      .ccd-file-warn {
+        flex: 0 0 auto;
+        color: var(--ccd-attention);
+        font-size: 11px;
+        cursor: help;
       }
 
       .ccd-recents {

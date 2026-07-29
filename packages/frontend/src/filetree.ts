@@ -1,4 +1,4 @@
-// filetree.ts — turns a commit's flat ChangedFile[] into a renderable
+// filetree.ts — turns a preview's flat PreviewFile[] into a renderable
 // directory tree for the sidebar. Pure and DOM-free: the caller owns the
 // rendering, this owns the shape.
 //
@@ -16,11 +16,22 @@
 // file is a leaf the user clicks, and folding it into its parent's label
 // would hide the row rather than shorten it.
 
-import type { ChangedFile, FileStatus } from '@ctrlclickdiff/shared';
+import type { FileStatus, PreviewFile } from '@ctrlclickdiff/shared';
 
 export type TreeNode =
   | { kind: 'dir'; name: string; path: string; children: TreeNode[] }
-  | { kind: 'file'; name: string; path: string; status: FileStatus };
+  | {
+      kind: 'file';
+      name: string;
+      path: string;
+      status: FileStatus;
+      /**
+       * Carried through from PreviewFile so the row can be marked: unselected
+       * commits whose edits are unavoidably in this file's diff. Empty for the
+       * ordinary case, which is every file of a single-commit review.
+       */
+      skippedShas: string[];
+    };
 
 /**
  * Groups `files` into a directory tree, collapsing single-child directory
@@ -33,7 +44,7 @@ export type TreeNode =
  * even when the path needed normalizing. A directory node's `path` is its
  * normalized prefix, suitable as a stable expand/collapse key.
  */
-export function buildFileTree(files: ChangedFile[]): TreeNode[] {
+export function buildFileTree(files: PreviewFile[]): TreeNode[] {
   const root = emptyDir();
 
   for (const file of files) {
@@ -66,7 +77,7 @@ export function buildFileTree(files: ChangedFile[]): TreeNode[] {
 /** A directory under construction: children not yet collapsed or sorted. */
 interface TrieDir {
   dirs: Map<string, TrieDir>;
-  files: Map<string, ChangedFile>;
+  files: Map<string, PreviewFile>;
 }
 
 function emptyDir(): TrieDir {
@@ -90,7 +101,13 @@ function toNodes(dir: TrieDir, prefix: string): TreeNode[] {
     nodes.push(toDirNode(name, child, prefix));
   }
   for (const [name, file] of dir.files) {
-    nodes.push({ kind: 'file', name, path: file.path, status: file.status });
+    nodes.push({
+      kind: 'file',
+      name,
+      path: file.path,
+      status: file.status,
+      skippedShas: file.skippedShas,
+    });
   }
   return nodes.sort(compareNodes);
 }

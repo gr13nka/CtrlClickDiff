@@ -38,6 +38,40 @@ function shortDate(date: string): string {
   return date.slice(0, 10);
 }
 
+const GHOST_KEY = 'ccd.ghostSquash';
+
+// Whether the palette opens ready to build a multi-commit selection. Remembered
+// like the diff view preferences, and for the same reason: someone comparing
+// several groupings of commits should not have to re-arm the mode on every
+// open. Anything but the exact string 'on' reads as off, which is the default.
+let ghostArmed = readPref(GHOST_KEY) === 'on';
+
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* blocked or full storage: the mode just won't survive the reload */
+  }
+}
+
+const GHOST_EXPLAINER =
+  'Shows several commits as one combined diff. Nothing is rewritten — no rebase, ' +
+  'no new commits, your history is untouched.\n\n' +
+  'Each file is diffed from just before the first selected commit that changed it, ' +
+  'to the selected commit that changed it last. A file that only unselected commits ' +
+  'touched disappears from the review entirely.\n\n' +
+  'A file that a commit you left out ALSO edited is marked ⚠ in the file list: its ' +
+  'diff contains that commit’s changes too, because no revision in the repository ' +
+  'holds the file with your commits and without the others.';
+
 export function openCommitPalette({ commits, selected, onApply }: CommitPaletteOptions): void {
   // PINNED. A ref's log is capped at 100 commits, so a review that sits on an
   // old commit while the branch moves will eventually see it fall off the end;
@@ -53,6 +87,16 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
   let query = '';
   let activeIndex = 0;
   let visible: CommitInfo[] = all;
+
+  // Forced on when several commits are already selected: single-select mode has
+  // no way to show a three-commit selection, so opening in it would misreport
+  // what the diff pane is holding.
+  let ghost = ghostArmed || selected.length > 1;
+
+  // The set being assembled, by sha. Separate from `selected` because in ghost
+  // mode nothing is applied until the reviewer says so — ticking four commits
+  // should cost one preview fetch, not four.
+  const working = new Set(selected.map((c) => c.sha));
 
   const backdrop = document.createElement('div');
   backdrop.className = 'ccd-modal-backdrop';
@@ -81,6 +125,42 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
 
   header.append(search);
 
+  // --- Ghost squash mode row -------------------------------------------------
+
+  const modeRow = document.createElement('div');
+  modeRow.className = 'ccd-palette-mode';
+
+  const ghostToggle = document.createElement('button');
+  ghostToggle.type = 'button';
+  ghostToggle.className = 'ccd-ghost-toggle';
+  ghostToggle.textContent = '👻 Ghost squash';
+  ghostToggle.addEventListener('click', () => setGhost(!ghost));
+
+  const infoButton = document.createElement('button');
+  infoButton.type = 'button';
+  infoButton.className = 'ccd-info-btn';
+  infoButton.textContent = 'ⓘ';
+  infoButton.ariaLabel = 'What is ghost squash?';
+  infoButton.ariaExpanded = 'false';
+
+  // An expandable note rather than a `title` tooltip: a title never appears for
+  // a keyboard user, and this text is the difference between "why did that file
+  // vanish" and understanding the feature.
+  const explainer = document.createElement('p');
+  explainer.className = 'ccd-palette-explainer';
+  explainer.textContent = GHOST_EXPLAINER;
+  explainer.hidden = true;
+
+  infoButton.addEventListener('click', () => {
+    explainer.hidden = !explainer.hidden;
+    infoButton.ariaExpanded = String(!explainer.hidden);
+  });
+
+  const modeHint = document.createElement('span');
+  modeHint.className = 'ccd-palette-mode-hint';
+
+  modeRow.append(ghostToggle, infoButton, modeHint);
+
   const list = document.createElement('ul');
   list.className = 'ccd-palette-list';
   list.id = 'ccd-palette-list';
@@ -91,10 +171,15 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
 
   const hint = document.createElement('div');
   hint.className = 'ccd-palette-hint';
-  hint.textContent = '↑↓ to move · Enter to open · Esc to close';
-  foot.append(hint);
 
-  modal.append(header, list, foot);
+  const previewButton = document.createElement('button');
+  previewButton.type = 'button';
+  previewButton.className = 'ccd-btn ccd-btn-primary';
+  previewButton.addEventListener('click', applyWorking);
+
+  foot.append(hint, previewButton);
+
+  modal.append(header, modeRow, explainer, list, foot);
   backdrop.append(modal);
 
   // Click-outside and Escape both close, because a modal that can only be
@@ -108,6 +193,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
     backdrop.remove();
   }
 
+  /** Single-select: choosing a row IS the choice, so it applies and closes. */
   function apply(commit: CommitInfo): void {
     close();
     // Unchanged selections are not reported: re-applying would restart the
@@ -115,6 +201,72 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
     // reading, for no change at all.
     if (selected.length === 1 && selected[0]?.sha === commit.sha) return;
     onApply([commit]);
+  }
+
+  /**
+   * Ghost mode: hand over everything ticked, newest-first.
+   *
+   * Ordered by `all`, which is the log's own newest-first order, so the
+   * selection reaching the shell is already in the order the backend will
+   * confirm — and the header lists the commits in the order the reviewer saw
+   * them, not the order they happened to tick them in.
+   */
+  function applyWorking(): void {
+    const next = all.filter((c) => working.has(c.sha));
+    if (next.length === 0) return;
+    close();
+    if (sameShas(next, selected)) return;
+    onApply(next);
+  }
+
+  function toggle(commit: CommitInfo): void {
+    if (!working.delete(commit.sha)) working.add(commit.sha);
+    renderList();
+    renderMode();
+  }
+
+  /**
+   * Flips the mode and remembers it.
+   *
+   * Turning it OFF collapses a multi-commit set to its newest member rather than
+   * clearing it: single-select mode has to name exactly one commit, and the
+   * newest is the one the reviewer would land on from a fresh load anyway.
+   * Nothing is applied here — the working set is not the selection until the
+   * reviewer commits to it.
+   */
+  function setGhost(next: boolean): void {
+    ghost = next;
+    ghostArmed = next;
+    writePref(GHOST_KEY, next ? 'on' : 'off');
+
+    if (!ghost && working.size > 1) {
+      const newest = all.find((c) => working.has(c.sha));
+      working.clear();
+      if (newest) working.add(newest.sha);
+    }
+    renderMode();
+    renderList();
+    search.focus();
+  }
+
+  function renderMode(): void {
+    ghostToggle.ariaPressed = String(ghost);
+    modal.classList.toggle('ghost', ghost);
+
+    const count = working.size;
+    modeHint.textContent = ghost
+      ? count === 0
+        ? 'Tick the commits to combine'
+        : `${count} selected`
+      : 'Combine several commits into one diff';
+
+    previewButton.hidden = !ghost;
+    previewButton.disabled = count === 0;
+    previewButton.textContent = count === 1 ? 'Preview 1 commit' : `Preview ${count} commits`;
+
+    hint.textContent = ghost
+      ? '↑↓ to move · Space to tick · Enter to preview · Esc to cancel'
+      : '↑↓ to move · Enter to open · Esc to close';
   }
 
   /**
@@ -139,8 +291,24 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
       renderList();
       return;
     }
+    if (e.key === ' ' && ghost) {
+      // Only in ghost mode: in single-select there is nothing to tick, and
+      // swallowing Space would stop the reviewer typing one into the search
+      // box, which any multi-word subject search needs.
+      e.preventDefault();
+      const commit = visible[activeIndex];
+      if (commit) toggle(commit);
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
+      // In ghost mode Enter commits the whole set, not the row under the cursor
+      // — the row is already ticked or not, and the decision Enter answers is
+      // "show me this".
+      if (ghost) {
+        applyWorking();
+        return;
+      }
       const commit = visible[activeIndex];
       if (commit) apply(commit);
     }
@@ -191,14 +359,16 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
       return;
     }
 
-    const selectedShas = new Set(selected.map((c) => c.sha));
     const pinnedShas = new Set(pinned.map((c) => c.sha));
 
     list.replaceChildren(
       ...visible.map((commit, index) =>
         commitRow(commit, {
           active: index === activeIndex,
-          selected: selectedShas.has(commit.sha),
+          // Against the working set, not `selected`: in ghost mode the ticks
+          // are what the reviewer is building, and they must reflect the clicks
+          // made since the palette opened rather than the last applied preview.
+          selected: working.has(commit.sha),
           pinned: pinnedShas.has(commit.sha),
         }),
       ),
@@ -231,6 +401,18 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
     // full form stays reachable when the panel is narrower than the line.
     item.title = `${commit.sha}\n${commit.subject}\n${commit.author} · ${commit.date}`;
 
+    // The tick box is a span, not an <input type=checkbox>: the whole row is
+    // already the hit target and already carries role=option with aria-selected,
+    // so a real checkbox would add a second focusable thing announcing the same
+    // state twice. CSS draws it from the row's .selected class, which means the
+    // box that looks ticked cannot disagree with the row that is.
+    if (ghost) {
+      const tick = document.createElement('span');
+      tick.className = 'ccd-palette-tick';
+      tick.ariaHidden = 'true';
+      item.append(tick);
+    }
+
     const sha = document.createElement('span');
     sha.className = 'ccd-palette-sha';
     sha.textContent = shortSha(commit.sha);
@@ -258,7 +440,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
       item.append(badge);
     }
 
-    item.addEventListener('click', () => apply(commit));
+    item.addEventListener('click', () => (ghost ? toggle(commit) : apply(commit)));
     return item;
   }
 
@@ -270,6 +452,11 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
   // the one next to it.
   const openAt = all.findIndex((c) => c.sha === selected[0]?.sha);
   activeIndex = openAt === -1 ? 0 : openAt;
+  renderMode();
   renderList();
   search.focus();
+}
+
+function sameShas(a: CommitInfo[], b: CommitInfo[]): boolean {
+  return a.length === b.length && a.every((commit, i) => commit.sha === b[i]?.sha);
 }
