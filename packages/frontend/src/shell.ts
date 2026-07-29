@@ -635,9 +635,9 @@ function optionsSignature(root: ParentNode): string {
   return [...root.querySelectorAll('option')]
     .map((opt) => {
       const group = opt.parentElement instanceof HTMLOptGroupElement ? opt.parentElement.label : '';
-      return `${group} ${opt.value} ${opt.textContent ?? ''}`;
+      return `${group}\u0000${opt.value}\u0000${opt.textContent ?? ''}`;
     })
-    .join('');
+    .join('\u0001');
 }
 
 /**
