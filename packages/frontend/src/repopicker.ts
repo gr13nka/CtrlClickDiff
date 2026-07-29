@@ -157,13 +157,22 @@ export function openRepoPicker({ onPick }: RepoPickerOptions): void {
   backdrop.addEventListener('mousedown', (e) => {
     if (e.target === backdrop) close();
   });
+  // Captured, and the key consumed, for the reason commitpalette.ts states for
+  // the same handler: a modal is the topmost thing on screen, so Escape belongs
+  // to it before anything underneath treats it as its own. In the bubble phase
+  // whatever holds focus gets first refusal — and Monaco binds Escape on its
+  // own DOM node, so the moment this picker is reachable with the editor
+  // focused, the bubble version stops closing it.
   const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') close();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
   };
-  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keydown', onKeyDown, true);
 
   function close(): void {
-    document.removeEventListener('keydown', onKeyDown);
+    document.removeEventListener('keydown', onKeyDown, true);
     backdrop.remove();
   }
 
