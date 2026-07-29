@@ -17,17 +17,8 @@ import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, sep } from 'node:path';
+import type { RepoEntry } from '@ctrlclickdiff/shared';
 import { revParseToplevel } from './git';
-
-/** A repository this backend will serve, addressed over HTTP by `id`. */
-export interface RepoEntry {
-  /** Deterministic, URL- and Monaco-safe handle — see `repoId()`. */
-  id: string;
-  /** Absolute, symlink-resolved path to the repository's toplevel. */
-  path: string;
-  /** `basename(path)` — a display label only; never used to identify the repo. */
-  name: string;
-}
 
 /**
  * A path the caller supplied cannot be registered: it does not exist, is not a

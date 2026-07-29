@@ -12,7 +12,8 @@
 // (only after a switch actually succeeds) while this file owns *how* it is
 // stored.
 
-import { api, type BrowseEntry, type BrowseListing, type RepoEntry } from './api';
+import type { BrowseEntry, BrowseListing, RepoEntry } from '@ctrlclickdiff/shared';
+import { api } from './api';
 
 /** A repo the user has opened before. Shape of one `ccd.recentRepos` element. */
 export interface RecentRepo {

@@ -8,8 +8,15 @@
 // F12 jump and a manual sidebar click behave identically and share one
 // highlighting/loading path.
 
-import type { BranchInfo, CommitInfo, Preview, PreviewFile } from '@ctrlclickdiff/shared';
-import { api, type ReposListing, type RepoEntry } from './api';
+import type {
+  BranchInfo,
+  CommitInfo,
+  Preview,
+  PreviewFile,
+  RepoEntry,
+  ReposListing,
+} from '@ctrlclickdiff/shared';
+import { api } from './api';
 import { openBranchPalette } from './branchpalette';
 import { openCommitPalette } from './commitpalette';
 import { initDiff, createDiff } from './diff';

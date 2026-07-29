@@ -16,28 +16,8 @@
 import { existsSync } from 'node:fs';
 import { readdir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import type { BrowseEntry, BrowseListing } from '@ctrlclickdiff/shared';
 import { isWithinRoot } from './repos';
-
-/** One subdirectory of the browsed directory. Names and paths only, by design. */
-export interface BrowseEntry {
-  name: string;
-  path: string;
-  /**
-   * Whether this directory looks like a git checkout — a hint for rendering,
-   * not a guarantee. See the `existsSync` note in `browseDirectory()`.
-   */
-  isRepo: boolean;
-}
-
-export interface BrowseListing {
-  /** The directory that was listed, symlink-resolved. */
-  path: string;
-  /** Parent directory, or null when `path` is the browse root — the picker's "up" is capped there. */
-  parent: string | null;
-  /** The browse root, so the client can render how far up it may go. */
-  root: string;
-  entries: BrowseEntry[];
-}
 
 /**
  * The requested path is unusable: it does not exist, is not a directory, or

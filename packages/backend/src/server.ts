@@ -15,11 +15,19 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
-import type { BranchInfo, CommitInfo, DefLocation, Preview } from '@ctrlclickdiff/shared';
-import { BrowsePathError, browseDirectory, type BrowseListing } from './browse';
+import type {
+  BranchInfo,
+  BrowseListing,
+  CommitInfo,
+  DefLocation,
+  Preview,
+  RepoEntry,
+  ReposListing,
+} from '@ctrlclickdiff/shared';
+import { BrowsePathError, browseDirectory } from './browse';
 import { listBranches, showFile, listCommits } from './git';
 import { buildPreview } from './preview';
-import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
+import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
 import { subscribe } from './watch';
 
@@ -79,7 +87,12 @@ app.post<{ Body: { path: string } }>(
 
 // GET /api/repos -> everything the frontend needs to populate a repo picker:
 // what is registered, which one to preselect, and where browsing may start.
-app.get('/api/repos', async () => {
+//
+// Annotated, like every other route here: the return type is what makes tsc
+// check this object literal against the shape api.ts parses it back into. An
+// unannotated handler is structurally whatever it happens to return, so a
+// renamed field would compile on both sides and only fail in the browser.
+app.get('/api/repos', async (): Promise<ReposListing> => {
   return { repos: repos.list(), defaultRepoId: repos.defaultRepoId, browseRoot };
 });
 

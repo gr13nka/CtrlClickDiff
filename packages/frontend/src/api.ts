@@ -8,46 +8,15 @@
 // `repo=` parameter, all repo-scoped requests funnel through repoFetch() below,
 // which appends it — and which owns the restart recovery described there.
 
-import type { BranchInfo, CommitInfo, DefLocation, Preview } from '@ctrlclickdiff/shared';
-
-// Mirrors of backend repos.ts's RepoEntry and browse.ts's BrowseListing /
-// BrowseEntry. Declared here rather than imported from @ctrlclickdiff/shared
-// because they are not in that package — this is their only client, and
-// promoting them is a change to a package this commit deliberately leaves
-// alone.
-
-/** A repository the backend will serve, addressed over HTTP by `id`. */
-export interface RepoEntry {
-  id: string;
-  /** Absolute, symlink-resolved toplevel — the only thing that can re-register it. */
-  path: string;
-  /** basename(path); a display label only, never used to identify the repo. */
-  name: string;
-}
-
-/** GET /api/repos — everything a repo picker needs to populate itself. */
-export interface ReposListing {
-  repos: RepoEntry[];
-  /** The boot REPO_ROOT repo, or null when the backend was started without one. */
-  defaultRepoId: string | null;
-  /** Directory browsing is capped to this subtree. */
-  browseRoot: string;
-}
-
-export interface BrowseEntry {
-  name: string;
-  path: string;
-  /** Display hint only — POST /api/repos is the authority on what registers. */
-  isRepo: boolean;
-}
-
-export interface BrowseListing {
-  path: string;
-  /** null when `path` is the browse root, i.e. there is no "up" from here. */
-  parent: string | null;
-  root: string;
-  entries: BrowseEntry[];
-}
+import type {
+  BranchInfo,
+  BrowseListing,
+  CommitInfo,
+  DefLocation,
+  Preview,
+  RepoEntry,
+  ReposListing,
+} from '@ctrlclickdiff/shared';
 
 // Path for every repo id this client has seen, learned from the two responses
 // that hand out ids (GET /api/repos and POST /api/repos). It exists for
