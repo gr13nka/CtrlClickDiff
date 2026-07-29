@@ -15,24 +15,17 @@
 //     diff.ts's getOrCreateModel, never a blind createModel) before we
 //     hand back the Location[].
 //
-// Model URIs are file://<repoId>/<rev>/<path> (built by diff.ts's modelUri,
-// which explains why the repo id lives in the authority). The model the user
-// clicked in is therefore the only thing this file needs to know *which*
-// repository to resolve against — there is no ambient "current repo" here, and
-// deliberately so: a resolution belongs to the model it started from.
-// `path` may itself contain '/', so parsing takes the first path segment as
-// `rev` and rejoins the remainder as `path`.
+// Model URIs are file://<repoId>/<rev>/<path>, built and read back by diff.ts's
+// modelUri/parseModelUri pair (which explains why the repo id lives in the
+// authority). The model the user clicked in is therefore the only thing this
+// file needs to know *which* repository to resolve against — there is no
+// ambient "current repo" here, and deliberately so: a resolution belongs to the
+// model it started from.
 
 import * as monaco from 'monaco-editor';
 import type { DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
-import { getOrCreateModel, modelUri, revealLine } from './diff';
-
-function parseModelUri(uri: monaco.Uri): { repoId: string; rev: string; path: string } {
-  const segments = uri.path.replace(/^\/+/, '').split('/');
-  const [rev = '', ...rest] = segments;
-  return { repoId: uri.authority, rev, path: rest.join('/') };
-}
+import { getOrCreateModel, modelUri, parseModelUri, revealLine } from './diff';
 
 // Memoizes GET /api/file per "<repoId>/<rev>/<path>" so the two
 // provideDefinition calls per click (see file header, fact 1) never

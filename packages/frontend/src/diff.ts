@@ -151,8 +151,8 @@ export function getOrCreateModel(uriString: string, src: string, language: strin
 
 /**
  * The one place that knows a model URI's shape: `file://<repoId>/<rev>/<path>`.
- * defprovider.ts's parseModelUri reads it back, and is the only other file
- * allowed to care.
+ * `parseModelUri` below is its inverse; together they are the only code allowed
+ * to care about the layout.
  *
  * The repo id goes in the URI's **authority**, not in the path, for two
  * reasons that both come from Monaco:
@@ -170,6 +170,22 @@ export function getOrCreateModel(uriString: string, src: string, language: strin
  */
 export function modelUri(repoId: string, rev: string, path: string): string {
   return `file://${repoId}/${rev}/${path}`;
+}
+
+/**
+ * `modelUri`'s inverse, and it lives here for that reason: a change to the
+ * layout above is only correct if this changes with it, and split across two
+ * files that pairing was a convention rather than something the code held.
+ * Getting it wrong fails silently at runtime — cross-file peek simply stops
+ * rendering — not at typecheck, which is what makes the split expensive.
+ *
+ * `path` may itself contain '/', so the first path segment is the rev and the
+ * remainder is rejoined.
+ */
+export function parseModelUri(uri: monaco.Uri): { repoId: string; rev: string; path: string } {
+  const segments = uri.path.replace(/^\/+/, '').split('/');
+  const [rev = '', ...rest] = segments;
+  return { repoId: uri.authority, rev, path: rest.join('/') };
 }
 
 /**
