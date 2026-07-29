@@ -15,6 +15,7 @@
 import type { BrowseEntry, BrowseListing, RepoEntry } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { createModal } from './modal';
+import { readStored, writeStored } from './storage';
 
 /** A repo the user has opened before. Shape of one `ccd.recentRepos` element. */
 export interface RecentRepo {
@@ -30,25 +31,24 @@ const RECENTS_KEY = 'ccd.recentRepos';
 // click away, short enough that the list stays scannable inside a modal.
 const MAX_RECENTS = 8;
 
-// localStorage is guarded on every access, not just on parse — in some privacy
-// modes the *property access itself* throws a SecurityError. Same rule the
-// sidebar width follows in shell.ts: a remembered repo is a convenience, and it
-// never gets to be the reason the app fails to start.
-
 /** Most-recent-first, or [] if storage is unreadable or holds anything else. */
 export function readRecents(): RecentRepo[] {
+  const raw = readStored(RECENTS_KEY);
+  if (raw === null) return [];
+  let parsed: unknown;
   try {
-    const raw = localStorage.getItem(RECENTS_KEY);
-    if (raw === null) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    // Validated element by element rather than trusted: this is user-editable
-    // storage that may also have been written by an older shape of this app,
-    // and a malformed entry must degrade to "no recents", never to a crash.
-    return parsed.filter(isRecentRepo).slice(0, MAX_RECENTS);
+    // Its own try, separate from storage.ts's: a SecurityError on the store and
+    // a syntax error in its contents are different failures with different
+    // causes, and one catch covering both said nothing about which had happened.
+    parsed = JSON.parse(raw);
   } catch {
     return [];
   }
+  if (!Array.isArray(parsed)) return [];
+  // Validated element by element rather than trusted: this is user-editable
+  // storage that may also have been written by an older shape of this app,
+  // and a malformed entry must degrade to "no recents", never to a crash.
+  return parsed.filter(isRecentRepo).slice(0, MAX_RECENTS);
 }
 
 function isRecentRepo(value: unknown): value is RecentRepo {
@@ -69,11 +69,7 @@ export function forgetRecent(path: string): void {
 }
 
 function writeRecents(recents: RecentRepo[]): void {
-  try {
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(recents.slice(0, MAX_RECENTS)));
-  } catch {
-    /* quota or blocked storage: the list just won't survive the reload */
-  }
+  writeStored(RECENTS_KEY, JSON.stringify(recents.slice(0, MAX_RECENTS)));
 }
 
 export interface RepoPickerOptions {

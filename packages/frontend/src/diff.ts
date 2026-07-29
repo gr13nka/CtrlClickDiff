@@ -7,6 +7,7 @@
 // repo/rev/path triple repeats (e.g. re-picking a file).
 
 import * as monaco from 'monaco-editor';
+import { readStored, writeStored } from './storage';
 import { api } from './api';
 
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
@@ -38,14 +39,14 @@ const DIFF_MODE_KEY = 'ccd.diffMode';
 // renders deletions as view zones above the lines that replaced them. Anything
 // but the exact string 'inline' — unset, blocked storage, hand-edited garbage —
 // reads as side-by-side, which is the default.
-let sideBySide = readPref(DIFF_MODE_KEY) !== 'inline';
+let sideBySide = readStored(DIFF_MODE_KEY) !== 'inline';
 
 const COLLAPSE_KEY = 'ccd.collapseUnchanged';
 
 // Whether long unchanged stretches are folded away behind a clickable bar.
 // On unless explicitly turned off, because a review is about what changed and
 // a 120-line file with a two-line edit is 118 lines of scrolling past nothing.
-let collapseUnchanged = readPref(COLLAPSE_KEY) !== 'off';
+let collapseUnchanged = readStored(COLLAPSE_KEY) !== 'off';
 
 /** The editor options the current preferences add up to. */
 function viewOptions(): monaco.editor.IDiffEditorOptions {
@@ -92,7 +93,7 @@ export function isSideBySide(): boolean {
  */
 export function setRenderSideBySide(next: boolean): void {
   sideBySide = next;
-  writePref(DIFF_MODE_KEY, next ? 'side-by-side' : 'inline');
+  writeStored(DIFF_MODE_KEY, next ? 'side-by-side' : 'inline');
   applyViewOptions();
 }
 
@@ -109,31 +110,8 @@ export function isCollapseUnchanged(): boolean {
  */
 export function setCollapseUnchanged(next: boolean): void {
   collapseUnchanged = next;
-  writePref(COLLAPSE_KEY, next ? 'on' : 'off');
+  writeStored(COLLAPSE_KEY, next ? 'on' : 'off');
   applyViewOptions();
-}
-
-// localStorage is guarded on every access, not just on parse: in some privacy
-// modes the *property access itself* throws a SecurityError, so an unguarded
-// read during module evaluation would take the app down before it drew
-// anything. A remembered view mode is a convenience; it never gets to be the
-// reason the app fails to start. (The same rule shell.ts's sidebar width
-// follows, for the same reason.)
-
-function readPref(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writePref(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* blocked or full storage: the preference just won't survive the reload */
-  }
 }
 
 /**

@@ -7,6 +7,8 @@
 // comment — this file shares nothing with the shell's state, and shell.ts still
 // gains exactly one call.
 
+import { readStored, removeStored, writeStored } from './storage';
+
 const SIDEBAR_WIDTH_KEY = 'ccd.sidebarWidth';
 const WIDTH_PROP = '--ccd-sidebar-w';
 const WIDTH_MIN_PROP = '--ccd-sidebar-w-min';
@@ -111,39 +113,22 @@ function readPx(el: HTMLElement, prop: string): number {
   return parseFloat(getComputedStyle(el).getPropertyValue(prop));
 }
 
-// localStorage is guarded on every access, not just on parse. In some privacy
-// modes the *property access itself* throws a SecurityError, so an unguarded
-// read at boot would take the whole app down. A remembered sidebar width is a
-// convenience; it never gets to be the reason the app fails to start.
-
 /** Last persisted width, or null if absent, unreadable or not a number. */
 function readStoredWidth(): number | null {
-  try {
-    const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-    if (raw === null) return null;
-    // Number('') and Number('   ') are 0, not NaN, so a blank entry would
-    // otherwise read as a valid width and clamp to the minimum. Corrupt
-    // storage should fall back to the stylesheet default, not to 220px.
-    if (raw.trim() === '') return null;
-    const px = Number(raw);
-    return Number.isFinite(px) ? px : null;
-  } catch {
-    return null;
-  }
+  const raw = readStored(SIDEBAR_WIDTH_KEY);
+  if (raw === null) return null;
+  // Number('') and Number('   ') are 0, not NaN, so a blank entry would
+  // otherwise read as a valid width and clamp to the minimum. Corrupt
+  // storage should fall back to the stylesheet default, not to 220px.
+  if (raw.trim() === '') return null;
+  const px = Number(raw);
+  return Number.isFinite(px) ? px : null;
 }
 
 function writeStoredWidth(px: number): void {
-  try {
-    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(px));
-  } catch {
-    /* quota or blocked storage: the width just won't survive the reload */
-  }
+  writeStored(SIDEBAR_WIDTH_KEY, String(px));
 }
 
 function clearStoredWidth(): void {
-  try {
-    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
-  } catch {
-    /* see above */
-  }
+  removeStored(SIDEBAR_WIDTH_KEY);
 }

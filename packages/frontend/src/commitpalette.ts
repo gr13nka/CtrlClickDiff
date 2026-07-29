@@ -19,6 +19,7 @@
 
 import type { CommitInfo } from '@ctrlclickdiff/shared';
 import { createModal } from './modal';
+import { readStored, writeStored } from './storage';
 
 export interface CommitPaletteOptions {
   /** The current ref's log, newest-first, as `GET /api/commits` returned it. */
@@ -45,23 +46,7 @@ const GHOST_KEY = 'ccd.ghostSquash';
 // like the diff view preferences, and for the same reason: someone comparing
 // several groupings of commits should not have to re-arm the mode on every
 // open. Anything but the exact string 'on' reads as off, which is the default.
-let ghostArmed = readPref(GHOST_KEY) === 'on';
-
-function readPref(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writePref(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* blocked or full storage: the mode just won't survive the reload */
-  }
-}
+let ghostArmed = readStored(GHOST_KEY) === 'on';
 
 const GHOST_EXPLAINER =
   'Shows several commits as one combined diff. Nothing is rewritten — no rebase, ' +
@@ -219,7 +204,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
   function setGhost(next: boolean): void {
     ghost = next;
     ghostArmed = next;
-    writePref(GHOST_KEY, next ? 'on' : 'off');
+    writeStored(GHOST_KEY, next ? 'on' : 'off');
 
     if (!ghost && working.size > 1) {
       const newest = all.find((c) => working.has(c.sha));
