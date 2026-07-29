@@ -184,12 +184,8 @@
         overflow: hidden;
       }
 
-      .ccd-picker {
-        flex: 0 0 auto;
-        padding: 10px 12px;
-        border-bottom: 1px solid var(--ccd-border);
-      }
-
+      /* Section label. Only the repo picker's "Recent" heading uses it now that
+         the sidebar's two <select> pickers are gone. */
       .ccd-label {
         display: block;
         font-size: 11px;
@@ -197,17 +193,6 @@
         letter-spacing: 0.04em;
         color: var(--ccd-fg-muted);
         margin-bottom: 4px;
-      }
-
-      .ccd-select {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 4px 6px;
-        background: var(--ccd-control-bg);
-        color: var(--ccd-fg-emphasis);
-        border: 1px solid var(--ccd-border-strong);
-        border-radius: 4px;
-        font: inherit;
       }
 
       /* One inset surface around the pair rather than a border each, so the two
@@ -602,6 +587,23 @@
         background: var(--ccd-control-bg);
         color: var(--ccd-attention);
         font-size: 10px;
+      }
+
+      /* Section label inside the branch palette's list. A row of the <ul> rather
+         than a wrapper, so filtering can drop it with its group and never leave
+         a header standing over nothing. */
+      .ccd-palette-group {
+        padding: 10px 8px 4px;
+        color: var(--ccd-fg-muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      /* The branch palette has no sha column to fill, so its marker column is
+         narrow and the name takes what the commit palette gives to the subject. */
+      .ccd-branch-row {
+        grid-template-columns: 2ch minmax(0, 1fr) auto;
       }
 
       .ccd-palette-empty {

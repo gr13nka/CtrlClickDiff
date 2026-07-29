@@ -10,6 +10,7 @@
 
 import type { BranchInfo, CommitInfo, Preview, PreviewFile } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
+import { openBranchPalette } from './branchpalette';
 import { openCommitPalette } from './commitpalette';
 import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
@@ -29,7 +30,7 @@ let repo: RepoEntry | null = null;
 
 // The ref the commit picker is currently listing, as a **full** refname
 // ('refs/heads/main'). Empty only before the first branch load; after that it
-// is whatever the branch <select> shows, and every api.commits() call names it.
+// is whatever the branch crumb shows, and every api.commits() call names it.
 //
 // The full refname and not the display name, because the display name does not
 // identify a ref: a local branch may be called `origin/main`, which renders
@@ -62,10 +63,11 @@ let files: PreviewFile[] = [];
 let spanRevs = { headSha: '', baseSha: '' };
 let activePath = '';
 
-// The current ref's log, as the palette lists it. Held here rather than fetched
-// when the palette opens, so opening it is instant and so a live refs event
-// updates it whether the palette is open or not.
+// What the two palettes list. Held here rather than fetched when a palette
+// opens, so opening one is instant and so a live refs event keeps both current
+// whether either is open or not.
 let commits: CommitInfo[] = [];
+let branches: BranchInfo[] = [];
 
 // Guards the fields above against out-of-order async completions.
 // Nothing serialises the async entry points below: picking a commit just fires
@@ -94,7 +96,6 @@ function stale(e: number): boolean {
 let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 let topBar: TopBar | null = null;
-let branchSelectEl: HTMLSelectElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
 
 export function getRepoId(): string {
@@ -150,24 +151,6 @@ export function initShell(rootEl: HTMLElement): void {
   const sidebar = document.createElement('div');
   sidebar.className = 'ccd-sidebar';
 
-  const branchPicker = document.createElement('div');
-  branchPicker.className = 'ccd-picker';
-
-  const branchLabel = document.createElement('label');
-  branchLabel.className = 'ccd-label';
-  branchLabel.htmlFor = 'ccd-branch-select';
-  branchLabel.textContent = 'Branch';
-
-  const branchSelect = document.createElement('select');
-  branchSelect.id = 'ccd-branch-select';
-  branchSelect.className = 'ccd-select';
-  branchSelect.addEventListener('change', () => {
-    if (branchSelect.value) void selectBranch(branchSelect.value);
-  });
-  branchSelectEl = branchSelect;
-
-  branchPicker.append(branchLabel, branchSelect);
-
   const status = document.createElement('div');
   status.className = 'ccd-status';
   statusEl = status;
@@ -176,7 +159,10 @@ export function initShell(rootEl: HTMLElement): void {
   list.className = 'ccd-file-list';
   fileListEl = list;
 
-  sidebar.append(branchPicker, status, list);
+  // The sidebar is now only the changed-file tree and the line above it that
+  // says what is happening to it. Everything that narrows the subject moved to
+  // the header, which is what gives the tree the whole column height.
+  sidebar.append(status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
   // #app.ccd-app). The tooltip is the only place the double-click reset is
@@ -316,6 +302,7 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
 
   selection = [];
   commits = [];
+  branches = [];
   spanRevs = { headSha: '', baseSha: '' };
   files = [];
   activePath = '';
@@ -349,6 +336,25 @@ function renderTrail(): void {
       onClick: () => openRepoPicker({ onPick: (entry) => void switchRepo(entry) })
     }
   ];
+
+  const branch = branches.find((b) => b.ref === selectedRef);
+  if (branch) {
+    crumbs.push({
+      key: 'branch',
+      icon: '⑂',
+      label: branch.name,
+      // The full refname, because the display name does not identify a ref: a
+      // local branch may be called `origin/main`, which renders exactly as the
+      // remote-tracking `refs/remotes/origin/main` does.
+      title: `${branch.ref} — click to switch branch`,
+      onClick: () =>
+        openBranchPalette({
+          branches,
+          selectedRef,
+          onPick: (ref) => void selectBranch(ref)
+        })
+    });
+  }
 
   // Only once there is a log to open it on: a crumb that opens an empty palette
   // is an affordance that lies.
@@ -453,14 +459,11 @@ async function loadRepoRefs(): Promise<void> {
  * must not go on to list commits.
  */
 async function loadBranches(): Promise<boolean> {
-  const select = branchSelectEl;
-  if (!select) return false;
-
   const e = beginEpoch();
   setStatus('Loading branches…');
-  let branches: BranchInfo[];
+  let loaded: BranchInfo[];
   try {
-    branches = await api.branches(requireRepoId());
+    loaded = await api.branches(requireRepoId());
   } catch (err) {
     if (stale(e)) return false;
     setStatus(`Error loading branches: ${errorMessage(err)}`);
@@ -471,91 +474,17 @@ async function loadBranches(): Promise<boolean> {
   // The backend guarantees an `isHead` entry for any repo that has a commit —
   // a detached HEAD gets a synthetic one — so an empty list means an empty
   // repository, with no ref to name and no commits to list under it.
+  branches = loaded;
   const head = branches.find((b) => b.isHead);
-  renderBranchOptions(branches);
   if (!head) {
+    renderTrail();
     setStatus('No branches found in repo.');
     return false;
   }
 
   selectedRef = head.ref;
-  select.value = head.ref;
+  renderTrail();
   return true;
-}
-
-/**
- * Repopulates the branch <select>: locals before remotes, each in its own
- * <optgroup>, HEAD's branch first inside its group and the rest alphabetical.
- *
- * HEAD leads because it is the entry the user has a standing relationship with
- * — it is what a fresh load selects, and it is where they will look to get back
- * after scrolling through fifty remote branches. The rest are alphabetical
- * because a branch list has no other order a reader can predict: sorting by tip
- * date would rank them by relevance, but it would also reorder the list under
- * the user's cursor every time a colleague pushed.
- *
- * Each option's value is the full refname and its text is the display name, per
- * BranchInfo — see the note on `selectedRef` for why the two are not
- * interchangeable.
- */
-function renderBranchOptions(branches: BranchInfo[]): void {
-  const select = branchSelectEl;
-  if (!select) return;
-
-  const options = document.createDocumentFragment();
-  for (const kind of ['local', 'remote'] as const) {
-    const group = branches.filter((b) => b.kind === kind).sort(byHeadThenName);
-    // A repo with no remote configured has no remote refs, and an empty
-    // <optgroup> still renders its label as an unselectable row.
-    if (group.length === 0) continue;
-
-    const optgroup = document.createElement('optgroup');
-    optgroup.label = kind === 'local' ? 'Local' : 'Remote';
-    for (const branch of group) {
-      const opt = document.createElement('option');
-      opt.value = branch.ref;
-      opt.textContent = branch.name;
-      opt.title = branch.ref;
-      optgroup.appendChild(opt);
-    }
-    options.appendChild(optgroup);
-  }
-
-  replaceOptions(select, options);
-}
-
-function byHeadThenName(a: BranchInfo, b: BranchInfo): number {
-  if (a.isHead !== b.isHead) return a.isHead ? -1 : 1;
-  return a.name.localeCompare(b.name);
-}
-
-/**
- * Swaps `select`'s contents for `options`, unless they are already identical.
- *
- * Repopulate, don't append: this runs again on every repo switch and every refs
- * event, and appending would stack one repo's branches under the last one's.
- *
- * The no-op case is what makes a refs event cheap enough to be frequent. Most of
- * them change one ref and leave every option this picker shows untouched, and
- * rebuilding a <select> anyway is not free to the user: it closes the dropdown if
- * they have it open, and drops the keyboard type-ahead they were in the middle
- * of. Comparing what is on screen with what is about to be is a few string
- * concatenations, and it is done against the live DOM rather than a remembered
- * signature so there is no second copy of "what is rendered" to drift.
- */
-function replaceOptions(select: HTMLSelectElement, options: DocumentFragment): void {
-  if (optionsSignature(options) === optionsSignature(select)) return;
-  select.replaceChildren(options);
-}
-
-/** Everything a reader of the <select> could tell apart: group, value, text. */
-function optionsSignature(root: ParentNode): string {
-  return [...root.querySelectorAll('option')]
-    .map((opt) => {
-      const group = opt.parentElement instanceof HTMLOptGroupElement ? opt.parentElement.label : '';
-      return `${group}\u0000${opt.value}\u0000${opt.textContent ?? ''}`;
-    })
-    .join('\u0001');
 }
 
 /**
@@ -565,11 +494,12 @@ function optionsSignature(root: ParentNode): string {
  * and nothing happens in between that a stale caller could corrupt. Flipping
  * branches quickly therefore leaves one in-flight commit load per flip, of
  * which only the last is not stale — and `selectedRef`, set synchronously by
- * each change event, already agrees with the <select> the user is looking at.
+ * each pick, already agrees with the crumb the user is looking at.
  */
 async function selectBranch(ref: string): Promise<void> {
   if (ref === selectedRef) return;
   selectedRef = ref;
+  renderTrail();
   await loadCommits();
 }
 
@@ -634,9 +564,6 @@ async function loadCommits(): Promise<void> {
  * they never did. The next refs event retries anyway.
  */
 async function refreshRefs(): Promise<void> {
-  const branchSelect = branchSelectEl;
-  if (!branchSelect) return;
-
   // Captured before the first await, because every decision below is about
   // where the user *was* when the event arrived.
   const previous = {
@@ -649,9 +576,9 @@ async function refreshRefs(): Promise<void> {
 
   const e = beginEpoch();
 
-  let branches: BranchInfo[];
+  let loadedBranches: BranchInfo[];
   try {
-    branches = await api.branches(requireRepoId());
+    loadedBranches = await api.branches(requireRepoId());
   } catch (err) {
     if (!stale(e)) console.warn(`[ccd] live refresh: branches failed: ${errorMessage(err)}`);
     return;
@@ -661,11 +588,11 @@ async function refreshRefs(): Promise<void> {
   // A branch can vanish under the user — deleted, renamed, or pruned by a fetch
   // — and there is then nothing to keep them on. HEAD's branch is the fallback
   // because it is the same answer a fresh load would give.
-  const target = branches.find((b) => b.ref === previous.ref) ?? branches.find((b) => b.isHead);
+  const target =
+    loadedBranches.find((b) => b.ref === previous.ref) ?? loadedBranches.find((b) => b.isHead);
   if (!target) return;
-  renderBranchOptions(branches);
+  branches = loadedBranches;
   selectedRef = target.ref;
-  branchSelect.value = target.ref;
 
   let loaded: CommitInfo[];
   try {
