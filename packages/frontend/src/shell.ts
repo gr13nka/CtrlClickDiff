@@ -10,6 +10,7 @@
 
 import type { BranchInfo, CommitInfo, Preview, PreviewFile } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
+import { openCommitPalette } from './commitpalette';
 import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
@@ -49,10 +50,22 @@ let selectedRef = '';
 // out of the middle of a range there is no single pair that describes every
 // file honestly. `spanRevs` below is the fallback for paths outside the set,
 // and is the only thing entitled to speak for the selection as a whole.
-let selectedShas: string[] = [];
+//
+// CommitInfo, not bare SHAs, and that is load-bearing: a selection has to
+// outlive the log it came from. A ref's log is capped at 100 commits and a
+// force-push can drop one sooner, so the commit a reviewer is sitting on may
+// stop being in anything we fetch — at which point its own metadata is the only
+// place its subject still exists. Carrying it here is what lets the header and
+// the palette keep naming it correctly instead of going blank.
+let selection: CommitInfo[] = [];
 let files: PreviewFile[] = [];
 let spanRevs = { headSha: '', baseSha: '' };
 let activePath = '';
+
+// The current ref's log, as the palette lists it. Held here rather than fetched
+// when the palette opens, so opening it is instant and so a live refs event
+// updates it whether the palette is open or not.
+let commits: CommitInfo[] = [];
 
 // Guards the fields above against out-of-order async completions.
 // Nothing serialises the async entry points below: picking a commit just fires
@@ -65,7 +78,7 @@ let activePath = '';
 // silent (no setStatus, no rethrow): the caller holding the current epoch
 // owns the status line and the state.
 //
-// Entry points nest — selectCommit hands off to openFile as its last act,
+// Entry points nest — selectCommits hands off to openFile as its last act,
 // and that handoff claims a fresh epoch. That's deliberate, and the reason
 // no entry point checks staleness after awaiting another one.
 let epoch = 0;
@@ -82,7 +95,6 @@ let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 let topBar: TopBar | null = null;
 let branchSelectEl: HTMLSelectElement | null = null;
-let commitSelectEl: HTMLSelectElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
 
 export function getRepoId(): string {
@@ -118,7 +130,7 @@ export function getBaseSha(): string {
 
 /** The commits currently being previewed, newest-first. */
 export function getSelectedShas(): string[] {
-  return selectedShas;
+  return selection.map((c) => c.sha);
 }
 
 /**
@@ -156,24 +168,6 @@ export function initShell(rootEl: HTMLElement): void {
 
   branchPicker.append(branchLabel, branchSelect);
 
-  const picker = document.createElement('div');
-  picker.className = 'ccd-picker';
-
-  const label = document.createElement('label');
-  label.className = 'ccd-label';
-  label.htmlFor = 'ccd-commit-select';
-  label.textContent = 'Commit';
-
-  const select = document.createElement('select');
-  select.id = 'ccd-commit-select';
-  select.className = 'ccd-select';
-  select.addEventListener('change', () => {
-    if (select.value) void selectCommits([select.value]);
-  });
-  commitSelectEl = select;
-
-  picker.append(label, select);
-
   const status = document.createElement('div');
   status.className = 'ccd-status';
   statusEl = status;
@@ -182,7 +176,7 @@ export function initShell(rootEl: HTMLElement): void {
   list.className = 'ccd-file-list';
   fileListEl = list;
 
-  sidebar.append(branchPicker, picker, status, list);
+  sidebar.append(branchPicker, status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
   // #app.ccd-app). The tooltip is the only place the double-click reset is
@@ -320,7 +314,8 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
   // that does not exist in the new repo.
   resetFileTreeState();
 
-  selectedShas = [];
+  selection = [];
+  commits = [];
   spanRevs = { headSha: '', baseSha: '' };
   files = [];
   activePath = '';
@@ -345,7 +340,7 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
  * share a basename — so the path has to stay reachable somewhere.
  */
 function renderTrail(): void {
-  topBar?.setCrumbs([
+  const crumbs: Crumb[] = [
     {
       key: 'repo',
       icon: '▤',
@@ -353,7 +348,40 @@ function renderTrail(): void {
       title: repo ? `${repo.path} — click to switch repository` : 'Click to choose a repository',
       onClick: () => openRepoPicker({ onPick: (entry) => void switchRepo(entry) })
     }
-  ]);
+  ];
+
+  // Only once there is a log to open it on: a crumb that opens an empty palette
+  // is an affordance that lies.
+  if (commits.length > 0 || selection.length > 0) {
+    crumbs.push({
+      key: 'selection',
+      icon: '◇',
+      label: selectionLabel(),
+      title: selectionTitle(),
+      onClick: () =>
+        openCommitPalette({
+          commits,
+          selected: selection,
+          onApply: (next) => void selectCommits(next)
+        })
+    });
+  }
+
+  topBar?.setCrumbs(crumbs);
+}
+
+/** `4221baf · Add User.email…`, or how many commits when it is more than one. */
+function selectionLabel(): string {
+  const first = selection[0];
+  if (!first) return 'Select commit…';
+  if (selection.length > 1) return `${selection.length} commits`;
+  return `${first.sha.slice(0, 7)} · ${first.subject}`;
+}
+
+/** Every selected commit, one per line — the crumb only has room for a count. */
+function selectionTitle(): string {
+  if (selection.length === 0) return 'Click to choose a commit';
+  return selection.map((c) => `${c.sha.slice(0, 7)} · ${c.subject}`).join('\n');
 }
 
 /**
@@ -382,7 +410,7 @@ function revsFor(path: string): { headSha: string; baseSha: string } {
  * abandoned rather than allowed to race this one to the diff pane.
  */
 export async function openFile(path: string): Promise<void> {
-  if (selectedShas.length === 0) {
+  if (selection.length === 0) {
     throw new Error('shell.openFile: no commit selected yet');
   }
   if (!files.some((f) => f.path === path)) {
@@ -502,79 +530,10 @@ function byHeadThenName(a: BranchInfo, b: BranchInfo): number {
 }
 
 /**
- * Points the commit picker at another ref and opens its newest commit.
- *
- * No epoch is claimed here: `loadCommits()` claims one before its first await,
- * and nothing happens in between that a stale caller could corrupt. Flipping
- * branches quickly therefore leaves one in-flight commit load per flip, of
- * which only the last is not stale — and `selectedRef`, set synchronously by
- * each change event, already agrees with the <select> the user is looking at.
- */
-async function selectBranch(ref: string): Promise<void> {
-  if (ref === selectedRef) return;
-  selectedRef = ref;
-  await loadCommits();
-}
-
-/**
- * `4221baf · 2024-01-03 · Add User.email…` — one commit as one <option>.
- *
- * The date is here because the branch picker put it here: two refs' logs can be
- * months apart, and between two commits from different branches nothing else on
- * the row says which is the newer. The calendar day only (CommitInfo.date is a
- * full ISO-8601 timestamp), because the sidebar is 300px by default and can be
- * dragged down to 220px, and a time of day would cost six characters the
- * subject has better use for.
- */
-function commitOptionLabel(commit: CommitInfo): string {
-  return `${commit.sha.slice(0, 7)} · ${commit.date.slice(0, 10)} · ${commit.subject}`;
-}
-
-/**
- * Repopulates the commit <select> with `commits`, newest first, plus `pinned` if
- * the caller has a selection the log no longer contains (see pinnedFor).
- *
- * The pinned entry goes last and inside its own `<optgroup label="Selected">`.
- * Last, so `options[0]` is still the tip for anyone asking; and in a group of its
- * own because appending it silently to a newest-first list would assert
- * something false — that it is the oldest commit on this branch, when it may not
- * be on the branch at all.
- */
-function renderCommitOptions(commits: CommitInfo[], pinned: PinnedCommit | null): void {
-  const select = commitSelectEl;
-  if (!select) return;
-
-  const options = document.createDocumentFragment();
-  for (const commit of commits) {
-    options.appendChild(commitOption(commit.sha, commitOptionLabel(commit)));
-  }
-  if (pinned) {
-    const group = document.createElement('optgroup');
-    group.label = 'Selected';
-    group.appendChild(commitOption(pinned.sha, pinned.label));
-    options.appendChild(group);
-  }
-
-  replaceOptions(select, options);
-}
-
-function commitOption(sha: string, label: string): HTMLOptionElement {
-  const opt = document.createElement('option');
-  opt.value = sha;
-  opt.textContent = label;
-  // A <select> clips its text rather than wrapping it, and what gets clipped is
-  // the subject — the one part of the row that is not recoverable from anywhere
-  // else on screen.
-  opt.title = label;
-  return opt;
-}
-
-/**
  * Swaps `select`'s contents for `options`, unless they are already identical.
  *
- * Repopulate, don't append: this runs again on every repo switch, every branch
- * switch and every refs event, and appending would stack one ref's log under the
- * last one's.
+ * Repopulate, don't append: this runs again on every repo switch and every refs
+ * event, and appending would stack one repo's branches under the last one's.
  *
  * The no-op case is what makes a refs event cheap enough to be frequent. Most of
  * them change one ref and leave every option this picker shows untouched, and
@@ -600,6 +559,21 @@ function optionsSignature(root: ParentNode): string {
 }
 
 /**
+ * Points the commit picker at another ref and opens its newest commit.
+ *
+ * No epoch is claimed here: `loadCommits()` claims one before its first await,
+ * and nothing happens in between that a stale caller could corrupt. Flipping
+ * branches quickly therefore leaves one in-flight commit load per flip, of
+ * which only the last is not stale — and `selectedRef`, set synchronously by
+ * each change event, already agrees with the <select> the user is looking at.
+ */
+async function selectBranch(ref: string): Promise<void> {
+  if (ref === selectedRef) return;
+  selectedRef = ref;
+  await loadCommits();
+}
+
+/**
  * Fills the commit picker from `selectedRef`'s log and opens its newest commit.
  * Reads the <select> from module state rather than taking it as an argument: it
  * is called from boot(), from every repo switch and from every branch switch,
@@ -614,31 +588,27 @@ function optionsSignature(root: ParentNode): string {
  * dressed as a right one.
  */
 async function loadCommits(): Promise<void> {
-  const select = commitSelectEl;
-  if (!select) return;
-
   const e = beginEpoch();
   setStatus('Loading commits…');
-  let commits: CommitInfo[];
+  let loaded: CommitInfo[];
   try {
-    commits = await api.commits(requireRepoId(), selectedRef);
+    loaded = await api.commits(requireRepoId(), selectedRef);
   } catch (err) {
     if (stale(e)) return;
     setStatus(`Error loading commits: ${errorMessage(err)}`);
     return;
   }
   if (stale(e)) return;
-  if (commits.length === 0) {
+
+  commits = loaded;
+  const newest = commits[0];
+  if (!newest) {
+    renderTrail();
     setStatus('No commits found on this branch.');
     return;
   }
 
-  renderCommitOptions(commits, null);
-
-  const newest = commits[0];
-  if (!newest) return; // unreachable (length checked above); narrows for TS
-  select.value = newest.sha;
-  await selectCommits([newest.sha]);
+  await selectCommits([newest]);
 }
 
 /**
@@ -648,10 +618,15 @@ async function loadCommits(): Promise<void> {
  * Claims a fresh epoch like any other entry point: this can land in the middle
  * of a commit or file load, and the two must not both write the sidebar. What it
  * must *not* do is leave the user's own in-flight action half-applied, so the
- * decision to reload the file list below is made against `selectedShas` — what
- * is actually rendered — rather than against the previous selection. If a
- * selectCommits() was abandoned by this very epoch, `selectedShas` still holds
- * the old selection and this refresh finishes the job the user started.
+ * decision to reload the file list below is made against `selection` — what is
+ * actually rendered — rather than against the previous selection. If a
+ * selectCommits() was abandoned by this very epoch, `selection` still holds the
+ * old commits and this refresh finishes the job the user started.
+ *
+ * Nothing here has to preserve a selection that falls out of the new log. The
+ * selection is CommitInfo and is held in this module, so a commit dropped by a
+ * force-push keeps its subject and keeps being named correctly — where the old
+ * <select> had to carry the label over from the option it was replacing.
  *
  * Failures are logged, not put on the status line. The user did not ask for this
  * refresh; taking over the status line to report that a background poll failed
@@ -660,18 +635,16 @@ async function loadCommits(): Promise<void> {
  */
 async function refreshRefs(): Promise<void> {
   const branchSelect = branchSelectEl;
-  const commitSelect = commitSelectEl;
-  if (!branchSelect || !commitSelect) return;
+  if (!branchSelect) return;
 
   // Captured before the first await, because every decision below is about
   // where the user *was* when the event arrived.
   const previous = {
     ref: selectedRef,
-    sha: commitSelect.value,
-    // The log is newest-first, and a pinned option is appended after it, so the
-    // first option is the tip of the ref as it was last listed.
-    tipSha: commitSelect.options[0]?.value ?? '',
-    label: commitSelect.selectedOptions[0]?.textContent ?? '',
+    selection,
+    // The log is newest-first, so its first entry is the tip of the ref as it
+    // was last listed.
+    tipSha: commits[0]?.sha ?? '',
   };
 
   const e = beginEpoch();
@@ -694,79 +667,72 @@ async function refreshRefs(): Promise<void> {
   selectedRef = target.ref;
   branchSelect.value = target.ref;
 
-  let commits: CommitInfo[];
+  let loaded: CommitInfo[];
   try {
-    commits = await api.commits(requireRepoId(), selectedRef);
+    loaded = await api.commits(requireRepoId(), selectedRef);
   } catch (err) {
     if (!stale(e)) console.warn(`[ccd] live refresh: commits failed: ${errorMessage(err)}`);
     return;
   }
   if (stale(e)) return;
-  const newest = commits[0];
+  const newest = loaded[0];
   if (!newest) return;
 
-  // FOLLOW HEAD ONLY FROM THE TIP. Someone sitting on the tip is watching the
-  // branch and wants the new commit; someone sitting on an older commit is
-  // reviewing it, and moving them would replace the diff they are reading —
-  // possibly mid-file, possibly mid-thought — with a different one they never
-  // asked for, and give them no way to know what they were just looking at.
-  // Being late to a new commit costs a click; being yanked off an old one costs
-  // the review. The user is also moved when the ref itself changed underneath
-  // them, since their old selection belongs to a branch that is no longer shown.
-  const followTip =
-    target.ref !== previous.ref || previous.sha === '' || previous.sha === previous.tipSha;
-  const selection = followTip ? newest.sha : previous.sha;
+  commits = loaded;
 
-  renderCommitOptions(commits, pinnedFor(selection, previous.label, commits));
-  commitSelect.value = selection;
+  // FOLLOW HEAD ONLY FROM THE TIP, AND ONLY FROM A SELECTION OF ONE. Someone
+  // sitting on the tip is watching the branch and wants the new commit; someone
+  // sitting on an older commit is reviewing it, and moving them would replace
+  // the diff they are reading — possibly mid-file, possibly mid-thought — with
+  // one they never asked for, and give them no way to know what they were just
+  // looking at. Being late to a new commit costs a click; being yanked off an
+  // old one costs the review.
+  //
+  // A multi-commit selection never follows, whatever it contains. Choosing
+  // several commits is a deliberate act that a background event has no business
+  // editing, and "the tip moved" says nothing about whether the new commit
+  // belongs in a set the reviewer assembled by hand.
+  //
+  // The user is still moved when the ref itself changed underneath them, since
+  // their old selection belongs to a branch that is no longer shown.
+  const wasOnTip =
+    previous.selection.length === 1 && previous.selection[0]?.sha === previous.tipSha;
+  const followTip = target.ref !== previous.ref || previous.selection.length === 0 || wasOnTip;
+  const next = followTip ? [newest] : previous.selection;
 
-  // Against what is rendered, not against previous.sha: this is "is the file
-  // list showing the selected commit", which is the question that decides
-  // whether it has to be rebuilt at all — and it is also true when nothing
-  // moved but the user's own load was abandoned by this epoch.
-  if (selectedShas.length !== 1 || selectedShas[0] !== selection) await selectCommits([selection]);
+  renderTrail();
+
+  // Against what is rendered, not against the previous selection: this is "is
+  // the file list showing the selected commits", which is the question that
+  // decides whether it has to be rebuilt at all — and it is also true when
+  // nothing moved but the user's own load was abandoned by this epoch.
+  if (!sameSelection(selection, next)) await selectCommits(next);
 }
 
-/**
- * The <option> a refreshed commit list must carry that its own log does not:
- * the user's selection, when the new log no longer contains it.
- *
- * A branch's log is capped at 100 commits, so a review that sits on an old
- * commit while the branch moves will eventually see that commit fall off the
- * end; a force-push or a reset can drop it sooner. Either way the alternative to
- * pinning is that `select.value = <sha not in the list>` silently selects
- * nothing, and the control then reads as some *other* commit — the picker would
- * be lying about what the diff pane is showing.
- *
- * Its label is carried over from the option being replaced rather than looked up
- * again: the commit is by definition not in anything we just fetched, and its
- * old row already says exactly the right thing.
- */
-function pinnedFor(sha: string, label: string, commits: CommitInfo[]): PinnedCommit | null {
-  if (commits.some((c) => c.sha === sha)) return null;
-  return { sha, label };
+function sameSelection(a: CommitInfo[], b: CommitInfo[]): boolean {
+  return a.length === b.length && a.every((commit, i) => commit.sha === b[i]?.sha);
 }
 
-interface PinnedCommit {
-  sha: string;
-  label: string;
+function isCommit(commit: CommitInfo | undefined): commit is CommitInfo {
+  return commit !== undefined;
 }
 
 /**
  * Resolves a selection of commits into its changed files, renders the file
  * list, and auto-opens the first non-deleted file.
  *
- * `shas` may name one commit (the ordinary review) or several (a ghost squash);
+ * `next` may name one commit (the ordinary review) or several (a ghost squash);
  * nothing below this point distinguishes them, because a preview of one commit
- * is exactly what the per-commit view always was. Order does not matter — the
- * backend sorts newest-first and hands the canonical order back.
+ * is exactly what the per-commit view always was. Caller order does not matter —
+ * the backend sorts newest-first and the selection is reordered to match, so
+ * what the header lists and what the diff shows cannot disagree.
  */
-async function selectCommits(shas: string[]): Promise<void> {
+async function selectCommits(next: CommitInfo[]): Promise<void> {
   const e = beginEpoch();
-  setStatus(shas.length > 1 ? `Combining ${shas.length} commits…` : 'Loading commit…');
+  setStatus(next.length > 1 ? `Combining ${next.length} commits…` : 'Loading commit…');
   let result: Preview;
   try {
-    result = await api.preview(requireRepoId(), shas);
+    result = await api.preview(requireRepoId(), next.map((c) => c.sha));
   } catch (err) {
     if (stale(e)) return;
     setStatus(`Error loading commit: ${errorMessage(err)}`);
@@ -774,10 +740,15 @@ async function selectCommits(shas: string[]): Promise<void> {
   }
   if (stale(e)) return;
 
-  selectedShas = result.shas;
+  // Reordered into the backend's canonical newest-first order. `byShaOrder`
+  // keeps the CommitInfo the caller supplied — the backend answers in SHAs, and
+  // the metadata behind them is what the header and palette render.
+  const bySha = new Map(next.map((c) => [c.sha, c]));
+  selection = result.shas.map((sha) => bySha.get(sha)).filter(isCommit);
   spanRevs = { headSha: result.spanHeadSha, baseSha: result.spanBaseSha };
   files = result.files;
   activePath = '';
+  renderTrail();
 
   // Auto-prewarm is intentionally disabled: on large repos (e.g. Lets-Plot,
   // ~2700 .kt files) eagerly indexing the whole revision on every commit
@@ -796,7 +767,7 @@ async function selectCommits(shas: string[]): Promise<void> {
   const first = files.find((f) => f.status !== 'D') ?? files[0];
   if (!first) {
     setStatus(
-      selectedShas.length > 1
+      selection.length > 1
         ? 'No .kt files changed in these commits.'
         : 'No .kt files changed in this commit.',
     );

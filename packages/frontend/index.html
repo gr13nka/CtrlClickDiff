@@ -490,6 +490,143 @@
         color: var(--ccd-fg-emphasis);
       }
 
+      /* ------------------------------------------------------------------
+         Commit palette (commitpalette.ts)
+
+         A .ccd-modal variant, not a second modal: it shares the backdrop, the
+         panel, the shadow and the dismissal rules, and differs only in being a
+         search-over-a-list rather than a form. Zero padding of its own so the
+         search box and the rows can run edge to edge — a full-bleed row is what
+         makes a long list read as a list rather than as a stack of cards.
+         ------------------------------------------------------------------ */
+      .ccd-palette {
+        width: min(720px, 92vw);
+        max-height: min(70vh, 640px);
+        padding: 0;
+        gap: 0;
+        border-radius: var(--ccd-radius-lg);
+        overflow: hidden;
+      }
+
+      .ccd-palette-header {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--ccd-border);
+      }
+
+      /* Borderless and transparent: the panel edge already frames it, and a
+         second box inside a box is the look this replaced. */
+      .ccd-palette-search {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 2px 0;
+        background: transparent;
+        color: var(--ccd-fg-emphasis);
+        border: 0;
+        outline: none;
+        font: 14px/1.4 system-ui, sans-serif;
+      }
+
+      .ccd-palette-search::placeholder {
+        color: var(--ccd-fg-muted);
+      }
+
+      .ccd-palette-list {
+        flex: 1 1 auto;
+        margin: 0;
+        padding: 6px;
+        list-style: none;
+        overflow-y: auto;
+        min-height: 0;
+      }
+
+      /* Grid, not flex: the sha column is fixed so every row's subject starts at
+         the same x, which is what lets the eye run straight down the subjects
+         instead of tracking a ragged left edge. The subject takes the slack and
+         the meta column sizes to its content. */
+      .ccd-palette-row {
+        display: grid;
+        grid-template-columns: 7ch minmax(0, 1fr) auto;
+        align-items: baseline;
+        gap: 10px;
+        padding: 6px 8px;
+        border-radius: var(--ccd-radius);
+        cursor: pointer;
+      }
+
+      /* Keyboard and mouse share one highlight. The list is driven from the
+         search box, so there is no focus ring to fall back on — .active IS the
+         cursor, and it has to be visible enough to be one. */
+      .ccd-palette-row:hover,
+      .ccd-palette-row.active {
+        background: var(--ccd-hover);
+      }
+
+      .ccd-palette-row.selected {
+        background: color-mix(in srgb, var(--ccd-accent-bg) 22%, transparent);
+      }
+
+      .ccd-palette-row.selected.active {
+        background: color-mix(in srgb, var(--ccd-accent-bg) 38%, transparent);
+      }
+
+      .ccd-palette-sha {
+        color: var(--ccd-fg-muted);
+        font: 12px ui-monospace, monospace;
+      }
+
+      .ccd-palette-subject {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--ccd-fg-emphasis);
+      }
+
+      .ccd-palette-meta {
+        color: var(--ccd-fg-muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      /* Spans the full row so it lands under the subject rather than squeezing
+         the grid's three columns into four. */
+      .ccd-palette-badge {
+        grid-column: 2 / -1;
+        justify-self: start;
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: var(--ccd-control-bg);
+        color: var(--ccd-attention);
+        font-size: 10px;
+      }
+
+      .ccd-palette-empty {
+        padding: 18px 10px;
+        color: var(--ccd-fg-muted);
+        text-align: center;
+      }
+
+      .ccd-palette-foot {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        border-top: 1px solid var(--ccd-border);
+        background: var(--ccd-canvas-inset);
+      }
+
+      .ccd-palette-hint {
+        flex: 1 1 auto;
+        min-width: 0;
+        color: var(--ccd-fg-muted);
+        font-size: 11px;
+      }
+
       .ccd-recents {
         flex: 0 0 auto;
       }
