@@ -74,7 +74,18 @@ export async function gitCommonDir(repoRoot: string): Promise<string> {
 }
 
 /**
- * `git log --format=%H%x00%s%x00%an%x00%aI -n 100 <ref>`, split on NUL per record.
+ * How many commits a single `listCommits` walk returns.
+ *
+ * Exported because it is not only this function's business: it is also the
+ * ceiling on what a *selection* can name, since a selection is assembled from
+ * commits the picker listed. server.ts's /api/preview enforces that, and the
+ * two must not be able to drift apart into two different hundreds.
+ */
+export const COMMIT_LOG_LIMIT = 100;
+
+/**
+ * `git log --format=%H%x00%s%x00%an%x00%aI -n <COMMIT_LOG_LIMIT> <ref>`, split
+ * on NUL per record.
  *
  * `ref` defaults to `HEAD` so callers that predate branch selection are
  * unaffected. It is expected to be a full refname from `listBranches()`, and is
@@ -100,7 +111,7 @@ export async function listCommits(repoRoot: string, ref = 'HEAD'): Promise<Commi
     'log',
     '--format=%H%x00%s%x00%an%x00%aI',
     '-n',
-    '100',
+    String(COMMIT_LOG_LIMIT),
     '--end-of-options',
     ref,
     '--',

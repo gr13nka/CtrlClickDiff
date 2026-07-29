@@ -25,7 +25,7 @@ import type {
   ReposListing,
 } from '@ctrlclickdiff/shared';
 import { BrowsePathError, browseDirectory } from './browse';
-import { listBranches, showFile, listCommits } from './git';
+import { COMMIT_LOG_LIMIT, listBranches, showFile, listCommits } from './git';
 import { buildPreview } from './preview';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
@@ -244,10 +244,6 @@ app.get<{ Querystring: { repo?: string; ref?: string } }>(
  */
 const SHA_LIST_PATTERN = '^[0-9a-f]{40}(,[0-9a-f]{40})*$';
 
-// The same ceiling `listCommits` puts on the log: a selection cannot name a
-// commit the picker never listed, so anything longer is not a real request.
-const MAX_SELECTED_COMMITS = 100;
-
 // GET /api/preview?repo=<id>&shas=<sha>,<sha>,... -> Preview
 //
 // The changed files of a *selection* of commits, each with the revision pair
@@ -277,9 +273,12 @@ app.get<{ Querystring: { shas: string; repo?: string } }>(
     }
 
     const shas = request.query.shas.split(',');
-    if (shas.length > MAX_SELECTED_COMMITS) {
+    // The same ceiling listCommits puts on the log, and now literally the same
+    // constant: a selection cannot name a commit the picker never listed, so
+    // anything longer is not a real request.
+    if (shas.length > COMMIT_LOG_LIMIT) {
       reply.code(400);
-      return { error: `too many commits selected: ${shas.length} > ${MAX_SELECTED_COMMITS}` };
+      return { error: `too many commits selected: ${shas.length} > ${COMMIT_LOG_LIMIT}` };
     }
 
     try {
