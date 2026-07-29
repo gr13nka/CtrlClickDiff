@@ -1,27 +1,64 @@
 # TO-DOS
 
-## Navigation & Repo/Branch/Commit Selection - 2026-07-23 17:00
+Nothing open. The backlog captured on 2026-07-23 is fully implemented — see the section below
+for what each item became, and `CLAUDE.md` for the constraints that fell out of building them.
 
-- **Add repo picker** - UI control to pick which git repo the tool reviews, without restarting the backend process. **Problem:** `REPO_ROOT` is read once at boot and memoized (`packages/backend/src/git.ts:26,35-47`, `getRepoRoot()`); there's no route, setter, or CLI flag that changes it at runtime, and no repo selector anywhere in the frontend. Switching repos today means killing the backend and relaunching it with a new `REPO_ROOT` env var. **Files:** `packages/backend/src/git.ts:35-47` (memoization to remove/replace), `packages/backend/src/server.ts:39-41` (`/api/commits` route + any new repo route), `packages/frontend/src/shell.ts` (UI). **Solution:** Likely needs a `POST /api/repo` (or similar) that revalidates a path and swaps the active repo root, replacing the module-level cache with per-request or session state; frontend needs a repo dropdown/input feeding it.
+## Shipped — 2026-07-29
 
-- **Add branch selector** - UI control to list and pick a branch within the currently selected repo. **Problem:** `listCommits()` runs `git log -n 100` with no ref argument (`packages/backend/src/git.ts:60-69`), so it only ever walks whatever `HEAD` currently is on disk in `REPO_ROOT` — there's no `branch`/`ref` query param accepted anywhere (`packages/backend/src/server.ts:39-41`), and no branch dropdown in `packages/frontend/src/shell.ts`. Changing branch today means `git checkout <branch>` on disk and restarting the backend. **Files:** `packages/backend/src/git.ts:60-69` (`listCommits`), `packages/backend/src/server.ts:39-41`, `packages/frontend/src/shell.ts`. **Solution:** Add a `GET /api/branches` route (`git branch --list` / `git for-each-ref`) and thread a `branch`/`ref` query param through `listCommits(ref)` → `git log <ref> -n 100`; frontend needs a branch dropdown that refetches commits on change.
+### Navigation & Repo/Branch/Commit Selection
 
-- **Make commit picker branch-aware** - Once branch selection exists, the commit list/picker (`packages/frontend/src/shell.ts:52-59,100-125`) needs to refetch and repopulate whenever the branch changes, rather than assuming a single fixed `HEAD`. **Problem:** Currently `loadCommits()` hits `/api/commits` with no query string (`packages/frontend/src/api.ts:17-19`) and always shows the newest-100-on-current-HEAD; there's no concept of "commits on branch X" in the UI or API today. **Files:** `packages/frontend/src/shell.ts:100-125`, `packages/frontend/src/api.ts:17-19`. **Solution:** Depends on the branch-selector backend work above; pass the chosen branch/ref through to `/api/commits`.
+- **Repo picker** — a directory browser in the sidebar, sandboxed to `CCD_BROWSE_ROOT`
+  (default `$HOME`), with a localStorage recents list. `REPO_ROOT` became optional and now only
+  names the repo to open on first load. The backend holds no "current repo": every data route
+  takes `?repo=<id>` against a validated, append-only registry with deterministic ids, so
+  switching repos never needs a restart and two tabs cannot fight each other.
+- **Branch selector** — `GET /api/branches` via `git for-each-ref`, grouped local/remote,
+  defaulting to the checked-out branch, and coping with a detached HEAD.
+- **Branch-aware commit picker** — `?ref=` threaded through `git log`, with commits now labelled
+  `sha · date · subject` so refs months apart are distinguishable.
 
-## Sidepanel / File List UX - 2026-07-23 17:00
+### Sidepanel / File List UX
 
-- **Make file sidepanel resizable** - Let the user drag-resize the width of the changed-files sidepanel. **Problem:** No resize handle or drag behavior exists today; panel width is presumably fixed by CSS. **Files:** `packages/frontend/src/shell.ts` (panel markup/layout), associated CSS. **Solution:** Standard drag-to-resize handle + persisted width (e.g. localStorage), or a CSS `resize` property if a simpler win is acceptable first.
+- **Resizable sidebar** — drag handle on a real grid track, pointer capture, clamped 220–640px,
+  width persisted. Monaco relayouts by itself (`automaticLayout` is `ResizeObserver`-backed).
+- **Filename-only rows** — fell out of the tree: leaves render basenames, full path stays in the
+  row's `title`. The remaining real bug was CSS — `.ccd-file-path` could not ellipsise without
+  `min-width: 0`.
+- **Tree view** — `filetree.ts` builds it client-side and collapses single-child directory
+  chains, so a six-level Kotlin package renders as one row instead of six.
 
-- **Collapse long file paths to filename only** - Show just the filename in the sidepanel list, with the full path available on hover (tooltip) or truncated with ellipsis. **Problem:** Sidepanel currently shows full relative paths for each changed file, which gets unreadable for deeply nested Kotlin package paths. **Files:** `packages/frontend/src/shell.ts` (file list rendering). **Solution:** Render basename as primary label, put full path in a `title` attribute or on-hover tooltip.
+### Theming
 
-- **Tree view for changed files instead of flat list** - Group changed files by directory into a collapsible tree, instead of today's flat list. **Problem:** The current file list is a flat list of changed `.kt` files with `A`/`M`/`D` badges (per README's "Using it" section); for commits touching many packages/directories this is hard to scan. **Files:** `packages/frontend/src/shell.ts` (file list rendering), likely needs a small tree-building helper fed by `ChangedFile[]` from `GET /api/commit/:sha/files`. **Solution:** Build a directory tree client-side from the flat `ChangedFile[]` response (no backend change needed), render as collapsible nodes.
+- **GitHub Primer dark** across the chrome and Monaco. This also fixed a real bug: no theme was
+  ever set, so the diff editor had been running Monaco's default *light* theme inside dark
+  chrome. Syntax colours are Primer's, and the word-diff tint was lowered to 10% to keep every
+  token above WCAG AA over the diff backgrounds.
 
-## Theming - 2026-07-23 17:00
+### Diff View Modes
 
-- **Adopt GitHub's diff theme and visual style** - Restyle the sidebar, file list, badges, and diff pane to match GitHub's PR diff look and feel (colors, spacing, badge/pill styling, addition/deletion green/red conventions) instead of the current generic dark editor theme. **Problem:** All current styling is a single inline `<style>` block in `packages/frontend/index.html:1-50+` (dark `#1e1e1e`/`#181818`/`#333` palette, plain badges via `.ccd-badge-A/M/D` classes) with no GitHub-derived design tokens; Monaco's diff editor colors (additions/deletions) are also whatever Monaco's default theme provides, not GitHub's specific green/red diff hues. **Files:** `packages/frontend/index.html` (all layout/theme CSS), `packages/frontend/src/diff.ts` (Monaco editor theme config, if a custom `monaco.editor.defineTheme` is added to match GitHub's diff colors), `packages/frontend/src/shell.ts` (badge/row markup, if GitHub-style pill badges need new DOM structure). **Solution:** Extract CSS custom properties (colors, spacing) matching GitHub's diff view (e.g. addition bg `#d1f8d1`/`#0f5323` dark-mode-ish greens, deletion reds), apply to `.ccd-*` classes; for Monaco's own diff coloring, register a custom theme via `monaco.editor.defineTheme` with GitHub-like `diffEditor.insertedTextBackground`/`diffEditor.removedTextBackground` tokens.
+- **Inline / side-by-side toggle** — via `updateOptions`, never by re-creating the editor, which
+  would silently drop peek.
+- **Collapsed unchanged regions** — on by default at `git diff -U3` context, with a toolbar
+  escape hatch.
 
-## Diff View Modes - 2026-07-23 17:00
+### Added during the work, not in the original backlog
 
-- **Add unified/single-page diff view alongside side-by-side** - Offer a one-column unified diff as an alternative to the current two-pane side-by-side view. **Problem:** `packages/frontend/src/diff.ts:31-33` always calls `monaco.editor.createDiffEditor(el, { readOnly: true, ... })`, which is Monaco's side-by-side renderer; there's no toggle for inline/unified mode, and the README's Scope table explicitly lists "unified/inline diff" as **Out** of the current MVP. **Files:** `packages/frontend/src/diff.ts:31-33`. **Solution:** Monaco's `DiffEditor` supports a `renderSideBySide: false` option for unified/inline rendering — likely just needs a view-mode toggle in the shell UI wired to that option, verifying the Ctrl+click peek provider (`defprovider.ts`) still works correctly in inline mode.
+- **Live updates** — the backend watches the selected repo's refs and pushes changes over SSE, so
+  a commit made in another terminal reaches the picker in ~200ms. It follows HEAD only if you
+  were already on the tip; an older selection is left alone.
 
-- **Collapse unchanged code by default (GitHub-style)** - Fold unchanged regions of the diff by default, with a button/click to expand a collapsed region and reveal the surrounding context, matching GitHub's PR diff UX. **Problem:** `packages/frontend/src/diff.ts:31-33`'s `createDiffEditor` call doesn't set this, so Monaco currently renders every line of both files in full, even long unchanged stretches. **Files:** `packages/frontend/src/diff.ts:31-33`. **Solution:** This is natively supported by the installed Monaco version (`monaco-editor@0.55.1`) — `IDiffEditorOptions.hideUnchangedRegions: { enabled, revealLineCount, minimumLineCount, contextLineCount }` (see `node_modules/.pnpm/monaco-editor@0.55.1/.../monaco.d.ts:4097-4102`). No custom folding logic needed — just pass `hideUnchangedRegions: { enabled: true }` (tune `contextLineCount`/`minimumLineCount` to taste) in the `createDiffEditor` options object alongside the existing `readOnly: true`.
+### Fixes uncovered along the way
+
+Each of these was reproduced before being fixed:
+
+- The symbol resolver kept a single `activeRevision` slot that `resolve()` read, so two
+  concurrent `/api/def` calls answered from each other's index — including a phantom definition
+  in a file that did not exist at that revision.
+- `selectCommit` and `createDiff` had no in-flight guard, so a slow earlier response could
+  overwrite a newer one and leave the diff showing a different file than the sidebar highlighted.
+- Cross-file jumps revealed before moving the cursor, and before the diff had been computed —
+  scrolling to 1862px for a line that turned out to be at 2622px, and leaving the target entirely
+  off screen once regions could collapse.
+- Live updates died permanently after any backend restart: Vite's proxy does not propagate
+  upstream death, and the SSE heartbeat was a comment, which `EventSource` never surfaces.
+- Two source files carried literal control bytes, which made git treat them as binary.

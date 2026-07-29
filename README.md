@@ -46,9 +46,6 @@ pnpm smoke        # optional: asserts the Kotlin WASM loads with a matching ABI
 
 ## Run
 
-The backend reviews **one git repository**, given by the `REPO_ROOT` env var. Point it at any
-local repo that has Kotlin files.
-
 ```bash
 # Terminal 1 — backend (serves git + the symbol index on :5178)
 REPO_ROOT=/path/to/your/kotlin/repo pnpm dev:backend
@@ -59,43 +56,68 @@ pnpm dev:frontend
 
 Open the Vite URL it prints (default http://localhost:5173).
 
-**One repo, one branch, per run.** `REPO_ROOT` is read once when the backend boots and cached
-for the life of the process — there is no in-app repo or branch switcher. The commit picker
-lists the newest 100 commits of whatever `HEAD` is checked out in `REPO_ROOT` at that moment
-(`git log -n 100`, no `--all`, no ref filter). To review a different repo or a different
-branch:
+`REPO_ROOT` is **optional** — it names the repo to open on first load, and nothing more. Repos,
+branches and commits are all switchable in the app, so the backend never needs restarting to
+review something else.
 
-```bash
-# stop the backend (Ctrl+C, or kill the process — see note below), then:
-cd /path/to/repo && git checkout <branch>   # only if you need a different branch
-REPO_ROOT=/path/to/repo pnpm dev:backend    # restart, pointed at the new repo/branch
-```
+Two environment variables:
 
-The frontend doesn't need restarting — it just proxies `/api` to whatever backend is running.
-One gotcha: killing the `pnpm dev:backend` process by its top-level PID doesn't always kill the
-underlying `tsx watch` server (pnpm wraps it in a process tree), which can leave the old backend
-still bound to port 5178 and silently serving the old repo. If a restart seems to not take
-effect, check `lsof -i :5178` and kill the actual listening PID.
+| Var | Default | Meaning |
+|---|---|---|
+| `REPO_ROOT` | *(none)* | Repo to select on first load. If unset, pick one with the repo picker. |
+| `CCD_BROWSE_ROOT` | `$HOME` | The only directory tree the repo picker may browse or register from. |
+| `PORT` | `5178` | Backend port. |
 
-**Using it:** choose a commit from the picker (auto-selects the newest on load) → click a
-changed `.kt` file in the sidebar (badged `A`/`M`/`D`, shown as a flat list — full path is the
-row's hover tooltip, not truncated in the UI yet) → **Ctrl+click** (Cmd on macOS) a symbol to
-peek its declaration inline, **Esc** to close the peek, **F12** to jump to the declaration's
-file (opens in the same diff pane, side-by-side view only — no unified/inline diff mode yet).
+`CCD_BROWSE_ROOT` is a sandbox, not a convenience: it bounds what the *browser* can reach on
+your filesystem. `REPO_ROOT` deliberately ignores it — that one is typed by whoever starts the
+process, who already has a shell.
 
-Planned UX work (repo/branch picker, resizable + tree-view sidebar, unified diff mode, etc.) is
-tracked in `TO-DOS.md`.
+**Using it:** pick a repository from the bar at the top of the sidebar (a directory browser,
+with recents for one-click switching) → pick a **branch** → pick a **commit** (labelled
+`sha · date · subject`) → click a changed `.kt` file in the sidebar tree → **Ctrl+click**
+(Cmd on macOS) a symbol to peek its declaration inline, **Esc** to close the peek, **F12** to
+jump to the declaration's file.
+
+The sidebar is drag-resizable (double-click the seam to reset) and groups changed files into a
+tree, collapsing single-child directory chains so a deep Kotlin package renders as one row. The
+toolbar toggles **side-by-side / inline** diff and **collapse unchanged** regions; both persist.
+
+**Commits appear as you make them.** The backend watches the selected repo's refs and pushes
+changes over SSE, so committing in another terminal updates the picker in about a fifth of a
+second. If you are sitting on the newest commit it follows along; if you are reviewing an older
+one it leaves your selection alone.
+
+Anything still planned is tracked in `TO-DOS.md`.
+
+### Development note
+
+`tsx watch` does not respawn its child if you kill it directly. If you kill the backend by PID
+(`lsof -i :5178`), `touch packages/backend/src/server.ts` to bring it back. Killing the
+`pnpm dev:backend` wrapper by its top-level PID does not always take the `tsx watch` process
+with it, which can leave the old backend bound to 5178.
 
 ### Try it with the bundled fixture
 
 ```bash
-bash fixtures/make-sample-repo.sh          # creates ~/ccd-sample-repo (3 commits, cross-file refs)
+bash fixtures/make-sample-repo.sh          # creates ~/ccd-sample-repo and ~/ccd-sample-repo-2
 REPO_ROOT=~/ccd-sample-repo pnpm dev:backend
 pnpm dev:frontend
 ```
 
 Open the newest commit, click `Main.kt`, and Ctrl+click `shout` — it peeks `fun shout` from
 `Utils.kt`, cross-file, inside the diff.
+
+The fixture exists to exercise the UI, so it is shaped for it:
+
+| Where | What it demonstrates |
+|---|---|
+| `main` (3 commits) | cross-file peek, the full `A`/`M`/`D` status matrix |
+| `feature/deep-paths` | 6-level Kotlin package paths — the tree's chain collapsing |
+| `feature/wide` | 12 files over 5 directories, plus a 120-line file with a 2-line edit in the middle — the only thing that makes collapsed unchanged regions visible |
+| `~/ccd-sample-repo-2` | a second repo, different package and class names, for the repo picker |
+
+`main`'s three commits have pinned dates, so their SHAs are reproducible across machines; the
+branches are appended after them and never disturb that.
 
 ## Layout
 
@@ -110,24 +132,36 @@ m1-spike/           throwaway CDN spike that proved peek-in-diff before any real
 
 ## HTTP API
 
+Every data route takes an optional **`?repo=<id>`**. Omitted, it falls back to the boot
+`REPO_ROOT`; unknown, it answers **409 `repo_not_registered`**, which the frontend treats as
+"the backend restarted" — it re-POSTs the repo path and retries once. That works because ids are
+deterministic (`slug(basename)-sha256(realpath)[0..8]`), so `POST /api/repos` is idempotent and
+an id survives a restart.
+
 | Endpoint | Returns |
 |---|---|
-| `GET /api/branches` | `BranchInfo[]` — local + remote-tracking branches, full refnames |
-| `GET /api/commits` | `CommitInfo[]` (newest 100) |
-| `GET /api/commit/:sha/files` | `{ headSha, baseSha, files: ChangedFile[] }` (`.kt` only, `A`/`M`/`D`) |
-| `GET /api/file?rev=&path=` | file content at a revision (`""` for the missing side of added/deleted files) |
-| `GET /api/def?name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found; multiple = ambiguous) |
-| `POST /api/index?rev=` | prewarm the symbol index for a revision |
+| `GET /api/repos` | `{ repos: RepoEntry[], defaultRepoId, browseRoot }` |
+| `POST /api/repos` `{path}` | `RepoEntry` — validates and registers a repo; idempotent |
 | `GET /api/browse?path=` | subdirectories of `path` (default: the browse root) — directory names only |
-| `GET /api/watch` | SSE stream — a `refs` event (`{headSha}`) when the repo's refs or `HEAD` change |
+| `GET /api/branches?repo=` | `BranchInfo[]` — local + remote-tracking branches, full refnames |
+| `GET /api/commits?repo=&ref=` | `CommitInfo[]` (newest 100 on `ref`, default `HEAD`) |
+| `GET /api/commit/:sha/files?repo=` | `{ headSha, baseSha, files: ChangedFile[] }` (`.kt` only, `A`/`M`/`D`) |
+| `GET /api/file?repo=&rev=&path=` | file content at a revision (`""` for the missing side of added/deleted files) |
+| `GET /api/def?repo=&name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found; multiple = ambiguous) |
+| `POST /api/index?repo=&rev=` | prewarm the symbol index for a revision |
+| `GET /api/watch?repo=` | SSE — `refs` events (`{headSha}`) on ref change, `ping` every 15s |
 
-## Scope (MVP)
+## Scope
 
-**In:** Kotlin, side-by-side diff, same-file + cross-file peek, name-based resolution, read-only.
-**Out:** other languages, semantic accuracy, unified/inline diff, staging/editing, auth/remote,
-desktop packaging, find-references/rename/hover, repo/branch switching without a restart,
-resizable/tree-view sidebar. The `SymbolResolver` seam keeps the resolver swappable; see
-`TO-DOS.md` for the rest.
+**In:** Kotlin; side-by-side *and* inline diff; same-file + cross-file peek; name-based
+resolution; in-app repo, branch and commit selection; live ref updates; read-only.
+
+**Out:** other languages, semantic accuracy (no overload resolution, import following, or jumps
+into stdlib), staging/editing, auth/remote access, desktop packaging, find-references, rename,
+hover. The `SymbolResolver` seam keeps the resolver swappable; see `TO-DOS.md` for anything
+still open.
+
+Requires **git ≥ 2.31** (`rev-parse --path-format`, used by the ref watcher).
 
 ### Read-only, mechanically
 
