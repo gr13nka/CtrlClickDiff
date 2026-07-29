@@ -3,7 +3,7 @@ import type * as monaco from 'monaco-editor';
 import { getModifiedEditor } from './diff';
 import { registerKotlinDefinitions } from './defprovider';
 import { installTheme } from './theme';
-import { initShell, openFile, getHeadSha, getBaseSha, getRepoId } from './shell';
+import { initShell, openFile, getHeadSha, getBaseSha, getRepoId, getSelectedShas } from './shell';
 
 // Milestone 4: replaces the M3 auto-load-first-file boot with the real
 // commit picker + changed-file switcher (shell.ts). All app state (current
@@ -25,6 +25,13 @@ interface CcdDebugHook {
   readonly repoId: string;
   readonly headSha: string;
   readonly baseSha: string;
+  /**
+   * The selected commits, newest-first — one sha in the ordinary case, several
+   * for a ghost squash. headSha/baseSha describe the span those collapse to,
+   * which cannot be read backwards: several different selections share a span.
+   * A harness checking *which* commits a preview was built from has to ask here.
+   */
+  readonly selectedShas: string[];
   readonly modifiedEditor: monaco.editor.IStandaloneCodeEditor | null;
 }
 
@@ -55,6 +62,9 @@ window.__ccd = {
   },
   get baseSha() {
     return getBaseSha();
+  },
+  get selectedShas() {
+    return getSelectedShas();
   },
   get modifiedEditor() {
     return getModifiedEditor();
