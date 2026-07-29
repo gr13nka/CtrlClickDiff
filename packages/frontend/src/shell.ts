@@ -8,7 +8,7 @@
 // F12 jump and a manual sidebar click behave identically and share one
 // highlighting/loading path.
 
-import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
+import type { BranchInfo, CommitInfo, Preview, PreviewFile } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
 import {
   initDiff,
@@ -42,16 +42,28 @@ let repo: RepoEntry | null = null;
 // those two is the one the user picked, and only the full form says which.
 let selectedRef = '';
 
-// Current commit's resolved state. Empty until the first commit loads.
-let headSha = '';
-let baseSha = '';
-let files: ChangedFile[] = [];
+// The commits being previewed, newest-first, and what that preview contains.
+// Empty until the first selection loads.
+//
+// A selection rather than a single sha because a review is not always one
+// commit: several commits read as one combined diff is the "ghost squash", and
+// a selection of exactly one is the ordinary single-commit case. Keeping one
+// field for both is what stops the two from drifting into two code paths.
+//
+// Each file carries its OWN base/head pair (see PreviewFile) — there is
+// deliberately no module-level headSha/baseSha, because with commits skipped
+// out of the middle of a range there is no single pair that describes every
+// file honestly. `spanRevs` below is the fallback for paths outside the set,
+// and is the only thing entitled to speak for the selection as a whole.
+let selectedShas: string[] = [];
+let files: PreviewFile[] = [];
+let spanRevs = { headSha: '', baseSha: '' };
 let activePath = '';
 
-// Guards the four fields above against out-of-order async completions.
-// Nothing serialises the async entry points below: the commit <select>'s
-// change listener just fires selectCommit(), so switching commits twice on a
-// slow repo leaves two api.commitFiles() calls in flight — and a slow
+// Guards the fields above against out-of-order async completions.
+// Nothing serialises the async entry points below: picking a commit just fires
+// selectCommits(), so switching twice on a slow repo leaves two api.preview()
+// calls in flight — and a slow
 // *earlier* response can land *after* a fast later one and overwrite it,
 // leaving the file list and diff disagreeing with the picker. So each entry
 // point claims an epoch on the way in and abandons itself after any await
@@ -95,12 +107,25 @@ function requireRepoId(): string {
   return repo.id;
 }
 
+/**
+ * The selection's outer revision pair, for main.ts's `window.__ccd` debug hook.
+ *
+ * The *span's* pair, not any one file's: with a multi-commit selection those
+ * differ, and a debug hook that named one file's revisions would be answering a
+ * question nobody asked. What a given file is actually rendered at is
+ * `revsFor(path)`.
+ */
 export function getHeadSha(): string {
-  return headSha;
+  return spanRevs.headSha;
 }
 
 export function getBaseSha(): string {
-  return baseSha;
+  return spanRevs.baseSha;
+}
+
+/** The commits currently being previewed, newest-first. */
+export function getSelectedShas(): string[] {
+  return selectedShas;
 }
 
 /**
@@ -171,7 +196,7 @@ export function initShell(rootEl: HTMLElement): void {
   select.id = 'ccd-commit-select';
   select.className = 'ccd-select';
   select.addEventListener('change', () => {
-    if (select.value) void selectCommit(select.value);
+    if (select.value) void selectCommits([select.value]);
   });
   commitSelectEl = select;
 
@@ -422,8 +447,8 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
   // that does not exist in the new repo.
   resetFileTreeState();
 
-  headSha = '';
-  baseSha = '';
+  selectedShas = [];
+  spanRevs = { headSha: '', baseSha: '' };
   files = [];
   activePath = '';
   rowsByPath.clear();
@@ -451,27 +476,43 @@ function renderRepoBar(): void {
 }
 
 /**
- * Switches the diff view to `path` at the current commit's head/base SHAs
- * and highlights its sidebar row. `path` need not belong to the current
- * commit's changed-file set — a cross-file F12 jump can land on any .kt
- * file at headSha (the resolver indexes the whole revision, not just the
- * changed files), and that's still a valid diff to render.
+ * The revision pair `path` should be diffed at.
  *
- * Claims an epoch, so an in-flight commit switch or an earlier file open is
+ * A file the selection changed answers for itself: `PreviewFile` carries the
+ * narrowest honest pair — from just before the first selected commit that
+ * touched it, to the selected commit that touched it last. That is what makes
+ * skipping a commit mean anything.
+ *
+ * The span pair is the fallback for a path the selection did NOT change, which
+ * a cross-file F12 jump can perfectly well land on: the resolver indexes the
+ * whole revision, not just the changed files. Such a path has no per-file
+ * answer, and the selection's outer bounds are the closest true one.
+ */
+function revsFor(path: string): { headSha: string; baseSha: string } {
+  return files.find((f) => f.path === path) ?? spanRevs;
+}
+
+/**
+ * Switches the diff view to `path` at that file's own head/base SHAs and
+ * highlights its sidebar row. `path` need not belong to the selection's
+ * changed-file set — see revsFor.
+ *
+ * Claims an epoch, so an in-flight selection switch or an earlier file open is
  * abandoned rather than allowed to race this one to the diff pane.
  */
 export async function openFile(path: string): Promise<void> {
-  if (!headSha) {
+  if (selectedShas.length === 0) {
     throw new Error('shell.openFile: no commit selected yet');
   }
   if (!files.some((f) => f.path === path)) {
-    console.debug(`[ccd] openFile: "${path}" is not one of this commit's changed files`);
+    console.debug(`[ccd] openFile: "${path}" is not one of this selection's changed files`);
   }
   const e = beginEpoch();
   activePath = path;
   highlightActiveRow();
+  const revs = revsFor(path);
   try {
-    await createDiff(requireRepoId(), headSha, baseSha, path);
+    await createDiff(requireRepoId(), revs.headSha, revs.baseSha, path);
   } catch (err) {
     // Superseded while the diff was loading: this failure is no longer the
     // one the user is waiting on, and every caller turns a throw into a
@@ -716,7 +757,7 @@ async function loadCommits(): Promise<void> {
   const newest = commits[0];
   if (!newest) return; // unreachable (length checked above); narrows for TS
   select.value = newest.sha;
-  await selectCommit(newest.sha);
+  await selectCommits([newest.sha]);
 }
 
 /**
@@ -726,10 +767,10 @@ async function loadCommits(): Promise<void> {
  * Claims a fresh epoch like any other entry point: this can land in the middle
  * of a commit or file load, and the two must not both write the sidebar. What it
  * must *not* do is leave the user's own in-flight action half-applied, so the
- * decision to reload the file list below is made against `headSha` — the commit
- * actually rendered — rather than against the previous selection. If a
- * selectCommit() was abandoned by this very epoch, `headSha` still holds the old
- * commit and this refresh finishes the job the user started.
+ * decision to reload the file list below is made against `selectedShas` — what
+ * is actually rendered — rather than against the previous selection. If a
+ * selectCommits() was abandoned by this very epoch, `selectedShas` still holds
+ * the old selection and this refresh finishes the job the user started.
  *
  * Failures are logged, not put on the status line. The user did not ask for this
  * refresh; taking over the status line to report that a background poll failed
@@ -798,11 +839,11 @@ async function refreshRefs(): Promise<void> {
   renderCommitOptions(commits, pinnedFor(selection, previous.label, commits));
   commitSelect.value = selection;
 
-  // Against headSha, not against previous.sha: this is "is the file list showing
-  // the selected commit", which is the question that decides whether it has to
-  // be rebuilt at all — and it is also true when nothing moved but the user's
-  // own commit load was abandoned by this epoch.
-  if (selection !== headSha) await selectCommit(selection);
+  // Against what is rendered, not against previous.sha: this is "is the file
+  // list showing the selected commit", which is the question that decides
+  // whether it has to be rebuilt at all — and it is also true when nothing
+  // moved but the user's own load was abandoned by this epoch.
+  if (selectedShas.length !== 1 || selectedShas[0] !== selection) await selectCommits([selection]);
 }
 
 /**
@@ -831,15 +872,20 @@ interface PinnedCommit {
 }
 
 /**
- * Resolves `sha` -> { headSha, baseSha, files }, renders the changed-file
+ * Resolves a selection of commits into its changed files, renders the file
  * list, and auto-opens the first non-deleted file.
+ *
+ * `shas` may name one commit (the ordinary review) or several (a ghost squash);
+ * nothing below this point distinguishes them, because a preview of one commit
+ * is exactly what the per-commit view always was. Order does not matter — the
+ * backend sorts newest-first and hands the canonical order back.
  */
-async function selectCommit(sha: string): Promise<void> {
+async function selectCommits(shas: string[]): Promise<void> {
   const e = beginEpoch();
-  setStatus('Loading commit…');
-  let result: CommitFiles;
+  setStatus(shas.length > 1 ? `Combining ${shas.length} commits…` : 'Loading commit…');
+  let result: Preview;
   try {
-    result = await api.commitFiles(requireRepoId(), sha);
+    result = await api.preview(requireRepoId(), shas);
   } catch (err) {
     if (stale(e)) return;
     setStatus(`Error loading commit: ${errorMessage(err)}`);
@@ -847,8 +893,8 @@ async function selectCommit(sha: string): Promise<void> {
   }
   if (stale(e)) return;
 
-  headSha = result.headSha;
-  baseSha = result.baseSha;
+  selectedShas = result.shas;
+  spanRevs = { headSha: result.spanHeadSha, baseSha: result.spanBaseSha };
   files = result.files;
   activePath = '';
 
@@ -868,7 +914,11 @@ async function selectCommit(sha: string): Promise<void> {
   // the diff on an empty pane with nothing to Ctrl+click.
   const first = files.find((f) => f.status !== 'D') ?? files[0];
   if (!first) {
-    setStatus('No .kt files changed in this commit.');
+    setStatus(
+      selectedShas.length > 1
+        ? 'No .kt files changed in these commits.'
+        : 'No .kt files changed in this commit.',
+    );
     return;
   }
 
@@ -913,7 +963,7 @@ export function resetFileTreeState(): void {
   collapsedDirs.clear();
 }
 
-function renderFileList(changedFiles: ChangedFile[]): void {
+function renderFileList(changedFiles: PreviewFile[]): void {
   if (!fileListEl) return;
   fileListEl.innerHTML = '';
   rowsByPath.clear();

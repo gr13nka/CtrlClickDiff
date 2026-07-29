@@ -15,9 +15,10 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
-import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo, DefLocation } from '@ctrlclickdiff/shared';
+import type { BranchInfo, CommitInfo, DefLocation, Preview } from '@ctrlclickdiff/shared';
 import { BrowsePathError, browseDirectory, type BrowseListing } from './browse';
-import { changedKtFiles, listBranches, resolveBaseSha, resolveSha, showFile, listCommits } from './git';
+import { listBranches, showFile, listCommits } from './git';
+import { buildPreview } from './preview';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot, type RepoEntry } from './repos';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
 import { subscribe } from './watch';
@@ -216,52 +217,68 @@ app.get<{ Querystring: { repo?: string; ref?: string } }>(
   },
 );
 
-// GET /api/commit/:sha/files?repo=<id> -> CommitFiles
-app.get<{ Params: { sha: string }; Querystring: { repo?: string } }>(
-  '/api/commit/:sha/files',
+/**
+ * A comma-separated list of full 40-char SHAs, lowercase — exactly what
+ * `GET /api/commits` hands out, and nothing else.
+ *
+ * A whitelist applied before the value reaches git's argv, on the same rule as
+ * REF_PATTERN: full SHAs are the only shape the frontend ever has, so accepting
+ * abbreviations or refs here would widen the surface for no caller's benefit.
+ * It also excludes a leading `-`, which is the case that matters — an argument
+ * like `--output=/tmp/x` reaching `git log` would be an *option*, not a
+ * revision. `buildPreview` additionally brackets the revs with
+ * `--end-of-options` / `--`; see the comment on `listCommits`.
+ */
+const SHA_LIST_PATTERN = '^[0-9a-f]{40}(,[0-9a-f]{40})*$';
+
+// The same ceiling `listCommits` puts on the log: a selection cannot name a
+// commit the picker never listed, so anything longer is not a real request.
+const MAX_SELECTED_COMMITS = 100;
+
+// GET /api/preview?repo=<id>&shas=<sha>,<sha>,... -> Preview
+//
+// The changed files of a *selection* of commits, each with the revision pair
+// its diff should be computed at. One selected commit is the ordinary
+// single-commit review, which is why there is no per-commit route beside this
+// one. See the doc on `buildPreview` for what a selection means when the
+// commits are not adjacent.
+app.get<{ Querystring: { shas: string; repo?: string } }>(
+  '/api/preview',
   {
     schema: {
-      params: {
-        type: 'object',
-        required: ['sha'],
-        properties: {
-          sha: { type: 'string', minLength: 1 },
-        },
-      },
       querystring: {
         type: 'object',
-        properties: { ...REPO_QUERY_PROPERTY },
+        required: ['shas'],
+        properties: {
+          shas: { type: 'string', pattern: SHA_LIST_PATTERN },
+          ...REPO_QUERY_PROPERTY,
+        },
       },
     },
   },
-  async (request, reply): Promise<CommitFiles | { error: string }> => {
-    const { sha } = request.params;
+  async (request, reply): Promise<Preview | { error: string }> => {
     const root = repoRootFor(request.query.repo);
     if (!root.ok) {
       reply.code(root.status);
       return root.body;
     }
 
-    // Resolve to a concrete 40-char SHA first (git rev-parse) so headSha is
-    // stable regardless of what the caller passed (abbreviated sha, "HEAD",
-    // ...) and so the base-sha/changed-files lookups below operate on the
-    // same canonical commit. An unresolvable ref (typo, unknown sha) is a
-    // client error, not a server fault — surface it as 404 rather than a
-    // bare 500 from a rejected git process.
-    let headSha: string;
-    try {
-      headSha = await resolveSha(root.root, sha);
-    } catch {
-      reply.code(404);
-      return { error: `commit not found: ${sha}` };
+    const shas = request.query.shas.split(',');
+    if (shas.length > MAX_SELECTED_COMMITS) {
+      reply.code(400);
+      return { error: `too many commits selected: ${shas.length} > ${MAX_SELECTED_COMMITS}` };
     }
 
-    const [files, baseSha]: [ChangedFile[], string] = await Promise.all([
-      changedKtFiles(root.root, headSha),
-      resolveBaseSha(root.root, headSha),
-    ]);
-
-    return { headSha, baseSha, files };
+    try {
+      return await buildPreview(root.root, shas);
+    } catch (err) {
+      // A selection naming a commit this repository does not have is the
+      // caller's mistake, not a server fault — most often a stale tab after a
+      // force-push. 404 rather than a bare 500 from a rejected git process.
+      request.log.warn({ err }, 'preview failed');
+      reply.code(404);
+      return { error: `commit not found in this repository: ${request.query.shas}` };
+    }
   },
 );
 

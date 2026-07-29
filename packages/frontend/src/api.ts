@@ -8,7 +8,7 @@
 // `repo=` parameter, all repo-scoped requests funnel through repoFetch() below,
 // which appends it — and which owns the restart recovery described there.
 
-import type { BranchInfo, CommitInfo, CommitFiles, DefLocation } from '@ctrlclickdiff/shared';
+import type { BranchInfo, CommitInfo, DefLocation, Preview } from '@ctrlclickdiff/shared';
 
 // Mirrors of backend repos.ts's RepoEntry and browse.ts's BrowseListing /
 // BrowseEntry. Declared here rather than imported from @ctrlclickdiff/shared
@@ -169,9 +169,21 @@ export const api = {
     return getRepoJson<CommitInfo[]>(repoId, url);
   },
 
-  /** GET /api/commit/:sha/files -> resolved head/base SHAs + changed .kt files. */
-  commitFiles(repoId: string, sha: string): Promise<CommitFiles> {
-    return getRepoJson<CommitFiles>(repoId, `/api/commit/${encodeURIComponent(sha)}/files`);
+  /**
+   * GET /api/preview?shas=<csv> -> the changed .kt files of a *selection* of
+   * commits, each with the revision pair its diff is computed at.
+   *
+   * One sha is the ordinary single-commit review; several is a ghost squash.
+   * There is no separate per-commit route, because a selection of one already
+   * answers that question exactly.
+   *
+   * `shas` must be full 40-char SHAs as `commits()` reported them — the
+   * backend's route schema accepts nothing else, so an abbreviation is a 400
+   * rather than a lookup. The backend re-sorts them newest-first, so the order
+   * sent here does not matter.
+   */
+  preview(repoId: string, shas: string[]): Promise<Preview> {
+    return getRepoJson<Preview>(repoId, '/api/preview?shas=' + encodeURIComponent(shas.join(',')));
   },
 
   /**

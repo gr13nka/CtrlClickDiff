@@ -10,7 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { BranchInfo, ChangedFile, CommitInfo, FileStatus } from '@ctrlclickdiff/shared';
+import type { BranchInfo, ChangedFile, CommitInfo } from '@ctrlclickdiff/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -170,38 +170,149 @@ export async function listBranches(repoRoot: string): Promise<BranchInfo[]> {
 
 /**
  * Resolve a ref (sha, abbreviated sha, `HEAD`, ...) to its full 40-char SHA via
- * `git rev-parse <rev>`. Used so `CommitFiles.headSha` is always a concrete,
- * collision-free identifier for model URIs (`file:///<sha>/<path>`) regardless
- * of what the caller passed in the URL.
+ * `git rev-parse <rev>`. Used by `listBranches` for the synthetic detached-HEAD
+ * entry's tip, and by `watch.ts` to report where HEAD moved to.
+ *
+ * Not on the request path any more: a preview's SHAs arrive already full and
+ * schema-checked, and `orderCommits` is what proves they name real commits.
  */
 export async function resolveSha(repoRoot: string, rev: string): Promise<string> {
   const stdout = await run(repoRoot, ['rev-parse', rev]);
   return stdout.trim();
 }
 
+/** One commit of a span: its first parent, and the `.kt` files it touched. */
+export interface CommitChanges {
+  /**
+   * First parent's SHA, or the empty-tree SHA for a root commit. First parent
+   * and not all of them: on a merge that is the "what did this bring onto the
+   * branch" side, which is the question a reviewer is asking.
+   */
+  parentSha: string;
+  files: ChangedFile[];
+}
+
 /**
- * `git diff-tree --root --no-commit-id --name-status -r <sha>`, filtered to
- * `.kt` paths only, mapped to {path, status}. `--root` is what makes this work
- * for a repo's very first commit (diff against the empty tree instead of
- * erroring for lack of a parent).
+ * Sorts `shas` newest-first, and proves every one of them exists.
  *
- * Rename/copy statuses (R100, C100, ...) are deliberately dropped — the M2
- * contract's FileStatus is only 'A' | 'M' | 'D'; treating a rename as a plain
- * add+delete pair is out of scope for the MVP (no rename-aware UI).
+ * `git log --no-walk` reads its arguments as a *set* of commits to show rather
+ * than as tips to walk from, so this is a sort, not a history traversal — and
+ * `--no-walk=sorted` (the default) is what makes it reverse-chronological
+ * regardless of the order they arrive in. `log` rather than `rev-list` on
+ * purpose: the two are the same plumbing, and `log` is already in this
+ * backend's permitted subcommand set (see CLAUDE.md).
+ *
+ * Existence checking is the second job and is not incidental: git fails the
+ * whole invocation with `fatal: bad object` on the first unknown SHA, which is
+ * how a selection naming a commit this repository does not have — a stale tab
+ * after a force-push, most often — becomes one clean rejection rather than a
+ * preview quietly computed from whichever commits happened to survive.
  */
-export async function changedKtFiles(repoRoot: string, sha: string): Promise<ChangedFile[]> {
-  const stdout = await run(repoRoot, ['diff-tree', '--root', '--no-commit-id', '--name-status', '-r', sha]);
-  const files: ChangedFile[] = [];
-  for (const line of stdout.split('\n')) {
-    if (!line) continue;
-    const [statusField, ...pathParts] = line.split('\t');
-    const status = statusField?.[0];
-    if (status !== 'A' && status !== 'M' && status !== 'D') continue;
-    const path = pathParts[pathParts.length - 1];
-    if (!path || !path.endsWith('.kt')) continue;
-    files.push({ path, status: status as FileStatus });
+export async function orderCommits(repoRoot: string, shas: string[]): Promise<string[]> {
+  const stdout = await run(repoRoot, ['log', '--no-walk', '--format=%H', '--end-of-options', ...shas, '--']);
+  return stdout.split('\n').filter(Boolean);
+}
+
+/**
+ * Every commit the selection `orderedShas` spans — the selected commits
+ * themselves plus everything between them — with each one's first parent and
+ * changed `.kt` files, keyed by full SHA and iterating newest-first.
+ *
+ * `orderedShas` must be newest-first; `orderCommits` is what establishes that.
+ * The commits in between are as load-bearing as the selected ones: they are the
+ * only way to discover that an *unselected* commit also touched a file, which
+ * is what `PreviewFile.skippedShas` reports.
+ *
+ * ONE `git log` invocation, deliberately, where the obvious implementation is a
+ * `rev-parse` plus a `diff-tree` per commit. A span can be as long as the 100
+ * commits the picker lists, and that would be 200 git processes to answer a
+ * single question — the parse cost is nothing next to the spawn cost. `%P` is
+ * what removes the `rev-parse` calls: the parents are already in the record.
+ *
+ * Every selected commit is passed as its own walk tip rather than just the
+ * newest one, so a selection is never quietly missing a commit the caller
+ * named: a commit is always reachable from itself. `^<oldest>` then bounds the
+ * walk from below. The bound is a *date*-ordered oldest, so a commit with a
+ * misleading date widens the walk rather than truncating it — slower, never
+ * wrong. A root `oldest` has no `^`, git rejects the revision outright, and the
+ * fallback drops the bound: for a selection reaching back to the root, the
+ * whole history IS the span.
+ *
+ * Three flags carry weight:
+ *
+ *   1. `--diff-merges=first-parent` (git >= 2.31). Without it `git log
+ *      --name-status` prints NO file list at all for a merge commit — a
+ *      selected merge would silently contribute nothing, and an unselected one
+ *      would never be spotted as a source of leaked edits. Defaulting to
+ *      "invisible" is the wrong failure for a review tool.
+ *   2. `--no-renames`: this codebase's FileStatus is 'A' | 'M' | 'D' only, and a
+ *      rename is read as the add/delete pair it decomposes into rather than as
+ *      an R-status the contract cannot express.
+ *   3. `--end-of-options` and the trailing `--`, for the reasons spelled out on
+ *      `listCommits` — these revs arrive from a request too. Note `^<sha>` still
+ *      excludes correctly after `--end-of-options`: it is revision syntax, not
+ *      an option, which `--not` is not (that form is rejected there).
+ */
+export async function commitSpan(
+  repoRoot: string,
+  orderedShas: string[],
+): Promise<Map<string, CommitChanges>> {
+  const oldest = orderedShas[orderedShas.length - 1];
+  if (oldest === undefined) return new Map();
+
+  const walk = [
+    'log',
+    '--format=%x00%H %P',
+    '--name-status',
+    '--no-renames',
+    '--diff-merges=first-parent',
+    '--end-of-options',
+    ...orderedShas,
+  ];
+  const stdout = await run(repoRoot, [...walk, `^${oldest}^`, '--']).catch(() => run(repoRoot, [...walk, '--']));
+
+  const span = new Map<string, CommitChanges>();
+  // NUL starts each commit record (see the %x00 in the format), so splitting on
+  // it yields one chunk per commit whose first line is "<sha> <parents...>" and
+  // whose remaining lines are the name-status rows. The leading chunk before
+  // the first NUL is empty.
+  for (const record of stdout.split('\x00')) {
+    const [header, ...statusLines] = record.split('\n');
+    if (!header) continue;
+    const [sha, ...parents] = header.trim().split(' ');
+    if (!sha) continue;
+
+    const files: ChangedFile[] = [];
+    for (const line of statusLines) {
+      const file = parseNameStatus(line);
+      if (file) files.push(file);
+    }
+    // A root commit's %P is empty, so there is no parent to diff against and
+    // the empty tree is the base — the same substitution resolveBaseSha makes.
+    span.set(sha, { parentSha: parents[0] ?? EMPTY_TREE_SHA, files });
   }
-  return files;
+  return span;
+}
+
+/**
+ * One `<status>\t<path>` row, or null when it is not a `.kt` file this contract
+ * can describe.
+ *
+ * Rename/copy statuses (R100, C100, ...) are dropped rather than mapped: the
+ * wire contract's FileStatus is 'A' | 'M' | 'D' only, and `--no-renames` on the
+ * caller's side already asks git to decompose a rename into the add/delete pair
+ * that contract can express. A row that still arrives as anything else is a
+ * status this app has no UI for, and inventing one would be worse than omitting
+ * it.
+ */
+function parseNameStatus(line: string): ChangedFile | null {
+  if (!line) return null;
+  const [statusField, ...pathParts] = line.split('\t');
+  const status = statusField?.[0];
+  if (status !== 'A' && status !== 'M' && status !== 'D') return null;
+  const path = pathParts[pathParts.length - 1];
+  if (!path || !path.endsWith('.kt')) return null;
+  return { path, status };
 }
 
 /**
@@ -212,20 +323,6 @@ export async function changedKtFiles(repoRoot: string, sha: string): Promise<Cha
 export async function listKtFilesAtRev(repoRoot: string, rev: string): Promise<string[]> {
   const stdout = await run(repoRoot, ['ls-tree', '-r', '--name-only', rev]);
   return stdout.split('\n').filter((path) => path.endsWith('.kt'));
-}
-
-/**
- * Resolve the base (pre-commit) side to a concrete SHA: `git rev-parse <sha>^`,
- * or the empty-tree hash for a root commit (which has no parent — rev-parse
- * exits non-zero and we catch that as "no parent" rather than a real error).
- */
-export async function resolveBaseSha(repoRoot: string, sha: string): Promise<string> {
-  try {
-    const stdout = await run(repoRoot, ['rev-parse', `${sha}^`]);
-    return stdout.trim();
-  } catch {
-    return EMPTY_TREE_SHA;
-  }
 }
 
 /**

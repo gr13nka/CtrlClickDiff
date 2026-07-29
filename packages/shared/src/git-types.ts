@@ -48,13 +48,68 @@ export interface BranchInfo {
 }
 
 /**
- * Response shape for `GET /api/commit/:sha/files`. Bundles the resolved head/base
- * SHAs alongside the changed-file list so the frontend never has to compute the
- * base side itself (root commits fall back to the empty-tree hash — see
- * git.ts's resolveBaseSha) — model URIs are built directly from these.
+ * One changed path in a preview, carrying the exact revision pair its diff is
+ * computed at.
+ *
+ * The pair is **per file**, not per selection, and that is what lets a reviewer
+ * leave commits out of the middle of a range. For a path, the interesting span
+ * is bounded by the selected commits that actually touched it: anything the
+ * selection did to it happened between those two points, and nothing outside
+ * them is the selection's doing. A single span shared by every file would drag
+ * in every unselected commit's edits to files the selection merely happens to
+ * bracket.
+ *
+ * Both SHAs name revisions that already exist in the object database, which is
+ * the property the whole feature rests on: `git show <rev>:<path>` works, so
+ * the file routes, the symbol index and Ctrl+click peek need to know nothing
+ * about previews at all. Synthesizing a tree for a selection would need
+ * `git merge-tree --write-tree`, which writes objects — see the read-only rule
+ * in CLAUDE.md.
  */
-export interface CommitFiles {
-  headSha: string;
+export interface PreviewFile {
+  path: string;
+  status: FileStatus;
+  /** First parent of the EARLIEST selected commit that touched `path`. */
   baseSha: string;
-  files: ChangedFile[];
+  /** The LATEST selected commit that touched `path`. */
+  headSha: string;
+  /**
+   * Commits the reviewer did NOT select that also touched `path` between
+   * `baseSha` and `headSha`, newest-first.
+   *
+   * Non-empty means this file's diff is not a pure squash of the selection —
+   * those commits' edits to it are in there too. That is not a bug to fix but a
+   * fact to report: `A -> (unselected edit) -> A'` has no two-SHA
+   * representation, because no revision in the repository holds this file with
+   * the selected edits and without the unselected ones. The UI marks such a row
+   * rather than hiding it; a changed file silently dropped from a review is a
+   * file nobody reviewed.
+   */
+  skippedShas: string[];
+}
+
+/**
+ * Response shape for `GET /api/preview`: what a selection of commits looks like
+ * when read as one diff.
+ *
+ * A selection of exactly one commit is the ordinary single-commit review, and
+ * yields precisely what a per-commit route would — which is why there is no
+ * longer a separate one.
+ */
+export interface Preview {
+  /** The selection, newest-first, resolved to full 40-char SHAs. */
+  shas: string[];
+  /**
+   * The revision pair for a path that is NOT in `files` — the newest selected
+   * commit, and the first parent of the oldest selected commit.
+   *
+   * This exists for one caller and would otherwise be dead weight: a cross-file
+   * jump can land on any `.kt` file at the revision, not only on one the
+   * selection changed (the resolver indexes the whole tree), and such a path has
+   * no `PreviewFile` to read revisions from. Do not use it for a path that does
+   * appear in `files` — that file's own pair is narrower and is the honest one.
+   */
+  spanHeadSha: string;
+  spanBaseSha: string;
+  files: PreviewFile[];
 }
