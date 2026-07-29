@@ -10,17 +10,11 @@
 
 import type { BranchInfo, CommitInfo, Preview, PreviewFile } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
-import {
-  initDiff,
-  createDiff,
-  isCollapseUnchanged,
-  isSideBySide,
-  setCollapseUnchanged,
-  setRenderSideBySide
-} from './diff';
+import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
+import { createTopBar, type Crumb, type TopBar } from './topbar';
 
 // The repository every request below is scoped to. Null only before boot()
 // has resolved one — there is no "no repo" state the UI can reach afterwards.
@@ -86,8 +80,7 @@ function stale(e: number): boolean {
 
 let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
-let repoButtonEl: HTMLButtonElement | null = null;
-let repoNameEl: HTMLElement | null = null;
+let topBar: TopBar | null = null;
 let branchSelectEl: HTMLSelectElement | null = null;
 let commitSelectEl: HTMLSelectElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
@@ -129,43 +122,22 @@ export function getSelectedShas(): string[] {
 }
 
 /**
- * Builds the sidebar (repo bar + commit picker + changed-file list) and the
- * diff pane inside `rootEl`, then kicks off loading the commit log. Call once
- * at boot.
+ * Builds the header, the changed-file sidebar and the diff pane inside
+ * `rootEl`, then kicks off loading the commit log. Call once at boot.
  */
 export function initShell(rootEl: HTMLElement): void {
   rootEl.innerHTML = '';
   rootEl.classList.add('ccd-app');
 
+  // Spans the full width above everything else, because what it names scopes
+  // everything else: the files below belong to this repository, this ref and
+  // these commits, and a reader who misses that reads the wrong history.
+  topBar = createTopBar();
+  renderTrail();
+
   const sidebar = document.createElement('div');
   sidebar.className = 'ccd-sidebar';
 
-  // Above the commit picker because it scopes it: the commits below belong to
-  // this repository, and a reader who misses that reads the wrong history.
-  const repoBar = document.createElement('div');
-  repoBar.className = 'ccd-repo-bar';
-
-  const repoButton = document.createElement('button');
-  repoButton.className = 'ccd-repo-button';
-  repoButton.type = 'button';
-  repoButton.addEventListener('click', () => {
-    openRepoPicker({ onPick: (entry) => void switchRepo(entry) });
-  });
-
-  // The name lives in its own element so it can ellipsise without taking the
-  // caret (a CSS ::after on the button) off the row with it.
-  const repoName = document.createElement('span');
-  repoName.className = 'ccd-repo-name';
-  repoButton.append(repoName);
-
-  repoButtonEl = repoButton;
-  repoNameEl = repoName;
-  renderRepoBar();
-  repoBar.append(repoButton);
-
-  // Above the commit picker for the same reason the repo bar is above both: it
-  // scopes it. The commits below are this ref's, and a reader who misses that
-  // reads a history the sidebar never claimed to be showing.
   const branchPicker = document.createElement('div');
   branchPicker.className = 'ccd-picker';
 
@@ -210,7 +182,7 @@ export function initShell(rootEl: HTMLElement): void {
   list.className = 'ccd-file-list';
   fileListEl = list;
 
-  sidebar.append(repoBar, branchPicker, picker, buildToolbar(), status, list);
+  sidebar.append(branchPicker, picker, status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
   // #app.ccd-app). The tooltip is the only place the double-click reset is
@@ -222,112 +194,13 @@ export function initShell(rootEl: HTMLElement): void {
   const diffPane = document.createElement('div');
   diffPane.className = 'ccd-diff-pane';
 
-  rootEl.append(sidebar, resizer, diffPane);
+  rootEl.append(topBar.el, sidebar, resizer, diffPane);
 
   initResizer(rootEl, resizer);
 
   initDiff(diffPane);
 
   void boot();
-}
-
-// ---------------------------------------------------------------------------
-// View-options toolbar
-//
-// Controls for *how* the diff pane renders, as opposed to what it renders —
-// which is why the row sits below the repo/branch/commit pickers and above the
-// file list: everything above it narrows the subject, everything below it is
-// the subject, and these apply to all of it equally.
-//
-// The state itself is deliberately not mirrored here. diff.ts owns each
-// preference, persists it and restores it, and the controls below read it back
-// — so there is no second copy of "which mode are we in" to drift from the
-// editor's, and nothing here has to repeat the localStorage restore to render
-// correctly on the first paint.
-// ---------------------------------------------------------------------------
-
-function buildToolbar(): HTMLElement {
-  const toolbar = document.createElement('div');
-  toolbar.className = 'ccd-toolbar';
-  toolbar.append(layoutToggle(), collapseToggle());
-  return toolbar;
-}
-
-/**
- * Side-by-side / Inline as a two-button segmented control.
- *
- * A segmented control rather than a checkbox because neither layout is the
- * negation of the other in the reader's head — "Inline" unchecked does not say
- * "side-by-side", it says nothing — and both names fit at the 220px minimum
- * sidebar width.
- *
- * `aria-pressed` is the only record of which segment is selected: index.html
- * styles the selection off that same attribute, so the button that looks
- * pressed is by construction the one a screen reader is told is pressed.
- */
-function layoutToggle(): HTMLElement {
-  const group = document.createElement('div');
-  group.className = 'ccd-segmented';
-  group.role = 'group';
-  group.ariaLabel = 'Diff layout';
-
-  const segments = [
-    { label: 'Side-by-side', sideBySide: true },
-    { label: 'Inline', sideBySide: false }
-  ].map((spec) => {
-    const button = document.createElement('button');
-    button.className = 'ccd-segment';
-    button.type = 'button';
-    button.textContent = spec.label;
-    group.append(button);
-    return { button, sideBySide: spec.sideBySide };
-  });
-
-  const sync = (): void => {
-    for (const segment of segments) {
-      segment.button.ariaPressed = String(segment.sideBySide === isSideBySide());
-    }
-  };
-
-  for (const segment of segments) {
-    segment.button.addEventListener('click', () => {
-      setRenderSideBySide(segment.sideBySide);
-      sync();
-    });
-  }
-
-  sync();
-  return group;
-}
-
-/**
- * "Collapse unchanged" as a checkbox, deliberately unlike the layout control
- * beside it: this one really is a thing that is either on or off, and its off
- * state has an obvious meaning (show every line). A segmented pair here would
- * cost twice the width to say the same thing.
- *
- * It exists at all as the escape hatch for the cases folding gets wrong — a
- * reader who wants the whole file, or a diff where the collapsed bars land
- * somewhere unhelpful — so it must stay one click away rather than live behind
- * a settings screen this app does not have.
- */
-function collapseToggle(): HTMLElement {
-  const wrapper = document.createElement('label');
-  wrapper.className = 'ccd-check';
-
-  const box = document.createElement('input');
-  box.type = 'checkbox';
-  box.className = 'ccd-checkbox';
-  // Read back from diff.ts rather than tracked here, so the restored
-  // preference and the control cannot disagree on the first paint.
-  box.checked = isCollapseUnchanged();
-  box.addEventListener('change', () => setCollapseUnchanged(box.checked));
-
-  const text = document.createElement('span');
-  text.textContent = 'Collapse unchanged';
-
-  wrapper.append(box, text);
-  return wrapper;
 }
 
 /**
@@ -393,7 +266,7 @@ async function preferredRepo(listing: ReposListing): Promise<RepoEntry | null> {
 function adoptRepo(entry: RepoEntry): void {
   repo = entry;
   rememberRecent(entry);
-  renderRepoBar();
+  renderTrail();
   connectLive();
 }
 
@@ -463,16 +336,24 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
 }
 
 /**
- * The bar shows the repo's *name* and carries its full path as the tooltip:
- * the sidebar is 300px by default and a checkout path does not fit in it, but
- * two repos can share a basename, so the path has to remain reachable.
+ * Repaints the header breadcrumb from current state. Cheap and idempotent, so
+ * every place that changes what is being reviewed can just call it rather than
+ * reason about which crumb it invalidated.
+ *
+ * Each crumb shows the short form and carries the long one as its tooltip: a
+ * header has room for a repo *name* but not a checkout path, and two repos can
+ * share a basename — so the path has to stay reachable somewhere.
  */
-function renderRepoBar(): void {
-  if (!repoButtonEl || !repoNameEl) return;
-  repoNameEl.textContent = repo?.name ?? 'Choose repository…';
-  repoButtonEl.title = repo
-    ? `${repo.path} — click to switch repository`
-    : 'Click to choose a repository';
+function renderTrail(): void {
+  topBar?.setCrumbs([
+    {
+      key: 'repo',
+      icon: '▤',
+      label: repo?.name ?? 'Choose repository…',
+      title: repo ? `${repo.path} — click to switch repository` : 'Click to choose a repository',
+      onClick: () => openRepoPicker({ onPick: (entry) => void switchRepo(entry) })
+    }
+  ]);
 }
 
 /**

@@ -38,6 +38,16 @@
         --ccd-backdrop: rgb(0 0 0 / 55%);
         --ccd-shadow: rgb(0 0 0 / 45%);
 
+        /* Shape. One radius scale and one hairline, so a control added later
+           inherits the look instead of inventing a third rounding. The chrome
+           deliberately reads quieter than the diff it frames: surfaces are
+           separated by a hairline and a hover fill rather than by boxes and
+           borders, which is what keeps the eye on the code. */
+        --ccd-radius: 6px;
+        --ccd-radius-lg: 10px;
+        --ccd-hover: rgb(255 255 255 / 6%);
+        --ccd-topbar-h: 44px;
+
         /* Metrics. The sidebar width is the live, draggable value (shell.ts
            overwrites it on #app); the -min/-max pair is the clamp the drag is
            held to, declared here so the numbers exist in exactly one place —
@@ -58,15 +68,110 @@
         background: var(--ccd-canvas);
       }
 
-      /* Milestone 4 shell layout — sidebar (commit picker + changed-file
-         list) + diff pane, built by shell.ts's initShell(). */
+      /* Shell layout, built by shell.ts's initShell(): a full-width header over
+         a sidebar / resizer / diff-pane row.
+
+         The header spans all three columns because what it names scopes all
+         three: the files in the sidebar and the diff beside them belong to the
+         repository, ref and commits it shows. It is also why the header is a
+         row of the same grid rather than a flex child inside the diff column —
+         the sidebar must start below it, not beside it. */
       #app.ccd-app {
         display: grid;
         grid-template-columns: var(--ccd-sidebar-w) 6px 1fr;
+        grid-template-rows: var(--ccd-topbar-h) minmax(0, 1fr);
         width: 100vw;
         height: 100vh;
         font: 13px/1.4 system-ui, sans-serif;
         color: var(--ccd-fg);
+      }
+
+      .ccd-topbar {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+        padding: 0 10px 0 8px;
+        background: var(--ccd-canvas-inset);
+        border-bottom: 1px solid var(--ccd-border);
+      }
+
+      /* Takes the slack so the view controls sit hard right, and min-width:0 so
+         a long repo name ellipsises inside its chip instead of pushing them off
+         the bar. */
+      .ccd-trail {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        min-width: 0;
+      }
+
+      /* Each crumb may shrink, but never below a legible stub — otherwise a
+         long repo name would starve the branch and commit crumbs beside it
+         rather than ellipsising itself. */
+      .ccd-crumb-slot {
+        display: flex;
+        min-width: 0;
+        flex: 0 1 auto;
+      }
+
+      .ccd-crumb-sep {
+        flex: 0 0 auto;
+        padding: 0 2px;
+        color: var(--ccd-fg-muted);
+        opacity: 0.6;
+      }
+
+      /* Borderless until hovered: three bordered controls in a row read as a
+         toolbar, where a breadcrumb should read as a sentence. The affordance
+         is the hover fill and the pointer, which is enough for a control whose
+         label is already the thing it changes. */
+      .ccd-chip {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        max-width: 100%;
+        padding: 4px 8px;
+        background: transparent;
+        color: var(--ccd-fg);
+        border: 0;
+        border-radius: var(--ccd-radius);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .ccd-chip:hover {
+        background: var(--ccd-hover);
+      }
+
+      .ccd-chip:focus-visible {
+        outline: 2px solid var(--ccd-accent-bg);
+        outline-offset: -1px;
+      }
+
+      .ccd-chip-icon {
+        flex: 0 0 auto;
+        color: var(--ccd-fg-muted);
+        font-size: 11px;
+      }
+
+      /* Its own element rather than a bare text node: an anonymous flex item
+         cannot take min-width:0, and without that the ellipsis never fires. */
+      .ccd-chip-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .ccd-topbar-actions {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
       }
 
       .ccd-sidebar {
@@ -77,57 +182,6 @@
         background: var(--ccd-canvas-inset);
         border-right: 1px solid var(--ccd-border);
         overflow: hidden;
-      }
-
-      /* Repo bar — the sidebar's first row, above the commit picker, because it
-         scopes it: the commits below belong to this repository. Deliberately
-         one control tall with no label of its own; the sidebar is 300px by
-         default and already owes its height to a picker, a status line and a
-         file tree. */
-      .ccd-repo-bar {
-        flex: 0 0 auto;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--ccd-border);
-      }
-
-      .ccd-repo-button {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        width: 100%;
-        box-sizing: border-box;
-        padding: 4px 6px;
-        background: var(--ccd-control-bg);
-        color: var(--ccd-fg-emphasis);
-        border: 1px solid var(--ccd-border-strong);
-        border-radius: 4px;
-        font: inherit;
-        text-align: left;
-        cursor: pointer;
-      }
-
-      .ccd-repo-button:hover {
-        background: var(--ccd-canvas-subtle);
-      }
-
-      /* The caret is CSS, so the only thing shell.ts writes into this button is
-         the repo name — the affordance cannot go missing on a re-render. */
-      .ccd-repo-button::after {
-        content: '▾';
-        flex: 0 0 auto;
-        color: var(--ccd-fg-muted);
-      }
-
-      /* Its own element rather than a bare text node: an anonymous flex item
-         cannot take min-width:0, and without that the ellipsis never fires and
-         a long repo name pushes the caret off the row. */
-      .ccd-repo-name {
-        flex: 1 1 auto;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font: 12px ui-monospace, monospace;
       }
 
       .ccd-picker {
@@ -156,66 +210,48 @@
         font: inherit;
       }
 
-      /* View-options row (shell.ts's buildToolbar) — how the diff pane renders,
-         as opposed to what it renders. Deliberately smaller than the pickers
-         above it: it is set once and then ignored, so it gets 11px labels and
-         no label row of its own.
-
-         It wraps rather than scrolls or ellipsises, because the sidebar can be
-         dragged down to 220px and a half-visible control is an unusable one: a
-         control that no longer fits beside its neighbour drops to the next
-         line, which costs height the file list can spare. */
-      .ccd-toolbar {
-        flex: 0 0 auto;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--ccd-border);
-      }
-
-      /* One border around the pair rather than one each, so the two buttons
-         read as a single control with two states instead of two independent
-         actions. overflow:hidden is what lets the outer radius clip the square
-         corners of the segments inside it. */
+      /* One inset surface around the pair rather than a border each, so the two
+         buttons read as a single control with two states instead of two
+         independent actions. overflow:hidden is what lets the outer radius clip
+         the square corners of the segments inside it. */
       .ccd-segmented {
         flex: 0 0 auto;
         display: flex;
-        border: 1px solid var(--ccd-border-strong);
-        border-radius: 4px;
+        padding: 2px;
+        gap: 2px;
+        background: var(--ccd-canvas-inset);
+        border: 1px solid var(--ccd-border);
+        border-radius: var(--ccd-radius);
         overflow: hidden;
       }
 
       .ccd-segment {
-        padding: 3px 8px;
-        background: var(--ccd-control-bg);
+        padding: 2px 10px;
+        background: transparent;
         color: var(--ccd-fg-muted);
         border: 0;
-        font: 11px/1.4 system-ui, sans-serif;
+        border-radius: 4px;
+        font: 11px/1.6 system-ui, sans-serif;
         white-space: nowrap;
         cursor: pointer;
       }
 
-      /* The seam between the segments. On the second one only, so the group's
-         own left border is not doubled. */
-      .ccd-segment + .ccd-segment {
-        border-left: 1px solid var(--ccd-border-strong);
-      }
-
       .ccd-segment:hover {
-        background: var(--ccd-canvas-subtle);
         color: var(--ccd-fg-emphasis);
       }
 
       /* Selection is styled off aria-pressed rather than a class of its own:
-         shell.ts writes exactly one attribute per segment, so the button that
+         topbar.ts writes exactly one attribute per segment, so the button that
          looks selected cannot disagree with the one screen readers are told is.
          After the :hover rule on purpose — equal specificity, so this wins for
-         a pressed segment under the cursor. */
+         a pressed segment under the cursor.
+
+         A raised surface rather than the accent blue: this is a view mode, not
+         a destination, and an accent-filled control on the header competes for
+         attention with the diff it is describing. */
       .ccd-segment[aria-pressed='true'] {
-        background: var(--ccd-accent-bg);
-        color: var(--ccd-accent-fg);
+        background: var(--ccd-control-bg);
+        color: var(--ccd-fg-emphasis);
       }
 
       /* A <label> wrapping the box, so the text is part of the hit target —
