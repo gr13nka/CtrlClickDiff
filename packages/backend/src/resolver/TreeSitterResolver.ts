@@ -58,7 +58,7 @@ interface DefMatch {
 }
 
 /** One (repo, revision)'s symbol table: definition name -> every location it's declared at. */
-type Index = Map<string, DefLocation[]>;
+type SymbolIndex = Map<string, DefLocation[]>;
 
 /**
  * Cache key for `indexByRepoRevision`. The repo root is part of the key
@@ -79,7 +79,7 @@ function indexKey(repoRoot: string, revision: string): string {
 export class TreeSitterResolver implements SymbolResolver {
   private parser: Parser | undefined;
   private query: Query | undefined;
-  private readonly indexByRepoRevision = new Map<string, Index>();
+  private readonly indexByRepoRevision = new Map<string, SymbolIndex>();
 
   /**
    * `Parser.init()` -> `Language.load(wasmPath)` -> `new Query(lang, tagsScmSource)`.
@@ -121,7 +121,7 @@ export class TreeSitterResolver implements SymbolResolver {
     const query = this.query;
 
     const paths = await listKtFilesAtRev(repoRoot, revision);
-    const index: Index = new Map();
+    const index: SymbolIndex = new Map();
 
     for (const path of paths) {
       const source = await showFile(repoRoot, revision, path);

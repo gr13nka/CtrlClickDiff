@@ -60,7 +60,7 @@ export function watchRepo(repoId: string, onRefsChanged: () => void): LiveStream
     // why this is not redundant with EventSource's own reconnect: through a dev
     // proxy the socket can stay open over a dead upstream and no error ever
     // fires, which makes silence the only symptom available.
-    const heard = (): void => {
+    const rearmSilenceWatchdog = (): void => {
       if (closed || source !== es) return;
       clearTimeout(silenceTimer);
       silenceTimer = setTimeout(() => {
@@ -73,14 +73,14 @@ export function watchRepo(repoId: string, onRefsChanged: () => void): LiveStream
 
     es.addEventListener('open', () => {
       retryMs = RETRY_MIN_MS;
-      heard();
+      rearmSilenceWatchdog();
     });
 
     // The heartbeat carries no information; being received IS the information.
-    es.addEventListener('ping', heard);
+    es.addEventListener('ping', rearmSilenceWatchdog);
 
     es.addEventListener('refs', () => {
-      heard();
+      rearmSilenceWatchdog();
       onRefsChanged();
     });
 
