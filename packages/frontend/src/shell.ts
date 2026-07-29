@@ -10,7 +10,14 @@
 
 import type { BranchInfo, ChangedFile, CommitFiles, CommitInfo } from '@ctrlclickdiff/shared';
 import { api, type ReposListing, type RepoEntry } from './api';
-import { initDiff, createDiff, isSideBySide, setRenderSideBySide } from './diff';
+import {
+  initDiff,
+  createDiff,
+  isCollapseUnchanged,
+  isSideBySide,
+  setCollapseUnchanged,
+  setRenderSideBySide
+} from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
@@ -217,7 +224,7 @@ export function initShell(rootEl: HTMLElement): void {
 function buildToolbar(): HTMLElement {
   const toolbar = document.createElement('div');
   toolbar.className = 'ccd-toolbar';
-  toolbar.append(layoutToggle());
+  toolbar.append(layoutToggle(), collapseToggle());
   return toolbar;
 }
 
@@ -266,6 +273,36 @@ function layoutToggle(): HTMLElement {
 
   sync();
   return group;
+}
+
+/**
+ * "Collapse unchanged" as a checkbox, deliberately unlike the layout control
+ * beside it: this one really is a thing that is either on or off, and its off
+ * state has an obvious meaning (show every line). A segmented pair here would
+ * cost twice the width to say the same thing.
+ *
+ * It exists at all as the escape hatch for the cases folding gets wrong — a
+ * reader who wants the whole file, or a diff where the collapsed bars land
+ * somewhere unhelpful — so it must stay one click away rather than live behind
+ * a settings screen this app does not have.
+ */
+function collapseToggle(): HTMLElement {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'ccd-check';
+
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.className = 'ccd-checkbox';
+  // Read back from diff.ts rather than tracked here, so the restored
+  // preference and the control cannot disagree on the first paint.
+  box.checked = isCollapseUnchanged();
+  box.addEventListener('change', () => setCollapseUnchanged(box.checked));
+
+  const text = document.createElement('span');
+  text.textContent = 'Collapse unchanged';
+
+  wrapper.append(box, text);
+  return wrapper;
 }
 
 /**

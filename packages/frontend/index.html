@@ -218,6 +218,36 @@
         color: var(--ccd-accent-fg);
       }
 
+      /* A <label> wrapping the box, so the text is part of the hit target —
+         an 11px caption beside a 13px checkbox is otherwise a very small
+         thing to aim at. */
+      .ccd-check {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--ccd-fg-muted);
+        font: 11px/1.4 system-ui, sans-serif;
+        white-space: nowrap;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .ccd-check:hover {
+        color: var(--ccd-fg-emphasis);
+      }
+
+      /* accent-color tints the native control instead of replacing it, which
+         keeps the platform's own focus ring and checked glyph — a hand-rolled
+         box would have to reimplement both to stay keyboard-usable. */
+      .ccd-checkbox {
+        width: 13px;
+        height: 13px;
+        margin: 0;
+        accent-color: var(--ccd-accent-bg);
+        cursor: pointer;
+      }
+
       .ccd-status {
         flex: 0 0 auto;
         padding: 6px 12px;

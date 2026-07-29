@@ -40,9 +40,33 @@ const DIFF_MODE_KEY = 'ccd.diffMode';
 // reads as side-by-side, which is the default.
 let sideBySide = readPref(DIFF_MODE_KEY) !== 'inline';
 
+const COLLAPSE_KEY = 'ccd.collapseUnchanged';
+
+// Whether long unchanged stretches are folded away behind a clickable bar.
+// On unless explicitly turned off, because a review is about what changed and
+// a 120-line file with a two-line edit is 118 lines of scrolling past nothing.
+let collapseUnchanged = readPref(COLLAPSE_KEY) !== 'off';
+
 /** The editor options the current preferences add up to. */
 function viewOptions(): monaco.editor.IDiffEditorOptions {
-  return { renderSideBySide: sideBySide };
+  return {
+    renderSideBySide: sideBySide,
+    hideUnchangedRegions: {
+      enabled: collapseUnchanged,
+      // Three lines each side of a change, which is `git diff -U3` and what
+      // GitHub shows — so a collapsed diff reads like the patch the reviewer
+      // already has in their head, rather than like a third convention.
+      contextLineCount: 3,
+      // Never fold a gap smaller than the context around it: hiding two lines
+      // behind a bar that costs one is a loss twice over, in lines saved and in
+      // a reader who now has to click to find out there was nothing there.
+      minimumLineCount: 3,
+      // Monaco's own default, kept: a click that reveals twenty lines is one
+      // screenful of decision, where a smaller step turns "read the rest of
+      // this function" into a drum roll.
+      revealLineCount: 20
+    }
+  };
 }
 
 /** No-op before initDiff(): the construction option bag carries the same values. */
@@ -69,6 +93,23 @@ export function isSideBySide(): boolean {
 export function setRenderSideBySide(next: boolean): void {
   sideBySide = next;
   writePref(DIFF_MODE_KEY, next ? 'side-by-side' : 'inline');
+  applyViewOptions();
+}
+
+/** Whether unchanged regions are being folded away. For the sidebar's toggle. */
+export function isCollapseUnchanged(): boolean {
+  return collapseUnchanged;
+}
+
+/**
+ * Folds unchanged regions away, or expands them all again, and remembers which.
+ *
+ * Only `enabled` is a preference; the three counts beside it in viewOptions()
+ * are not, so turning this back on restores the same layout it hid.
+ */
+export function setCollapseUnchanged(next: boolean): void {
+  collapseUnchanged = next;
+  writePref(COLLAPSE_KEY, next ? 'on' : 'off');
   applyViewOptions();
 }
 
@@ -209,8 +250,9 @@ const DIFF_COMPUTE_TIMEOUT_MS = 1000;
 
 // setModel is synchronous but the diff behind it is not, and until it lands
 // the modified pane still carries its pre-diff line layout: none of the
-// alignment view zones that pad it against the original, and none of the
-// collapsed regions if hideUnchangedRegions is ever switched on. Scrolling
+// alignment view zones that pad it against the original, and — now that
+// hideUnchangedRegions is on — none of the collapsed regions either, so every
+// line below the first fold is still at its uncollapsed position. Scrolling
 // before that point aims at coordinates that are about to move.
 //
 // onDidUpdateDiff alone is not that signal. It's Event.fromObservableLight
@@ -241,12 +283,13 @@ function whenDiffComputed(editor: monaco.editor.IStandaloneDiffEditor): Promise<
  * Positions the cursor at `line` in the modified pane and centers it, once
  * the diff for the current model pair has actually been computed.
  *
- * Cursor first, reveal second — deliberately, not incidentally. With
- * hideUnchangedRegions enabled it is the *cursor* move that expands a
- * collapsed region: the feature listens on onDidChangeCursorPosition and
- * calls ensureModifiedLineIsVisible from there. Revealing first would center
- * against the un-expanded layout and let the expansion shift the line back
- * out from under the viewport.
+ * Cursor first, reveal second — deliberately, not incidentally. It is the
+ * *cursor* move that expands a collapsed region: hideUnchangedRegions listens
+ * on onDidChangeCursorPosition and calls ensureModifiedLineIsVisible from
+ * there. Revealing first would center against the un-expanded layout and let
+ * the expansion shift the line back out from under the viewport — which, now
+ * that collapsing is on by default, is the ordinary case for any cross-file
+ * jump into the middle of a file rather than a hypothetical one.
  *
  * Superseded calls return without touching the editor, on the same rule
  * createDiff follows: the cursor belongs to whichever file the user asked for
