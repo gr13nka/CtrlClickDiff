@@ -363,12 +363,23 @@ app.post<{ Querystring: { rev: string; repo?: string } }>(
 );
 
 /**
- * A comment line every 25s. Any traffic will do — the purpose is to keep proxies
- * and NAT tables from reaping a connection that is idle by design (a repository
- * nobody is committing to sends nothing for hours), and to let the client notice
- * a dead link rather than waiting forever on a socket that is quietly gone.
+ * A `ping` event every 15s. Two jobs, and the second is why it is a named event
+ * rather than the `: ping` comment it started as.
+ *
+ * Keeping proxies and NAT tables from reaping a connection that is idle by
+ * design (a repository nobody is committing to sends nothing for hours) is the
+ * obvious one, and a comment would do.
+ *
+ * The other is liveness, and a comment cannot do it: EventSource never surfaces
+ * comment lines to script, so a client has nothing to time out against. That
+ * matters because Vite's dev proxy does NOT propagate upstream death — measured,
+ * a stream read straight from this server errors ~2.5s after the process dies,
+ * while the same stream through the proxy stays open with a dead upstream for
+ * over 20s with no error event at all. A named event gives the client a
+ * heartbeat it can actually observe, so live.ts can notice the silence and
+ * reopen. 15s is three chances inside its 45s watchdog.
  */
-const SSE_HEARTBEAT_MS = 25_000;
+const SSE_HEARTBEAT_MS = 15_000;
 
 // GET /api/watch?repo=<id> -> text/event-stream
 //
@@ -419,7 +430,7 @@ app.get<{ Querystring: { repo?: string } }>(
     const unsubscribe = subscribe(root.root, (headSha) => {
       send(`event: refs\ndata: ${JSON.stringify({ headSha })}\n\n`);
     });
-    const heartbeat = setInterval(() => send(': ping\n\n'), SSE_HEARTBEAT_MS);
+    const heartbeat = setInterval(() => send('event: ping\ndata: {}\n\n'), SSE_HEARTBEAT_MS);
     heartbeat.unref();
 
     // 'close' fires for every ending — tab closed, network dropped, server

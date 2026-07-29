@@ -26,6 +26,12 @@ export interface LiveStream {
 const RETRY_MIN_MS = 3000;
 const RETRY_MAX_MS = 30000;
 
+// How long the stream may stay silent before we assume it is dead and reopen.
+// The server sends a `ping` event every 15s, so this is three missed beats —
+// wide enough that a slow tab or a suspended laptop does not trip it, tight
+// enough that a stale stream self-heals in well under a minute.
+const SILENCE_TIMEOUT_MS = 45000;
+
 /**
  * Watches `repoId` and calls `onRefsChanged` every time its refs move.
  *
@@ -40,6 +46,7 @@ export function watchRepo(repoId: string, onRefsChanged: () => void): LiveStream
 
   let source: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let silenceTimer: ReturnType<typeof setTimeout> | undefined;
   let retryMs = RETRY_MIN_MS;
   let closed = false;
 
@@ -47,11 +54,35 @@ export function watchRepo(repoId: string, onRefsChanged: () => void): LiveStream
     const es = new EventSource(url);
     source = es;
 
+    // Restarted on every byte the server sends. If it ever fires, the stream
+    // has gone quiet for longer than the server's heartbeat can explain, so we
+    // throw it away and open a fresh one. See the note in the error handler for
+    // why this is not redundant with EventSource's own reconnect: through a dev
+    // proxy the socket can stay open over a dead upstream and no error ever
+    // fires, which makes silence the only symptom available.
+    const heard = (): void => {
+      if (closed || source !== es) return;
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => {
+        if (closed || source !== es) return;
+        console.debug(`[ccd] watch stream for ${repoId} went silent; reopening`);
+        es.close();
+        open();
+      }, SILENCE_TIMEOUT_MS);
+    };
+
     es.addEventListener('open', () => {
       retryMs = RETRY_MIN_MS;
+      heard();
     });
 
-    es.addEventListener('refs', () => onRefsChanged());
+    // The heartbeat carries no information; being received IS the information.
+    es.addEventListener('ping', heard);
+
+    es.addEventListener('refs', () => {
+      heard();
+      onRefsChanged();
+    });
 
     es.addEventListener('error', () => {
       // Ignore an error from a stream we have already replaced or closed.
@@ -66,18 +97,15 @@ export function watchRepo(repoId: string, onRefsChanged: () => void): LiveStream
         return;
       }
 
-      // NOTE, because it costs an hour to rediscover: in `pnpm dev` neither
-      // branch of this handler runs when the *backend* restarts. Measured
-      // (scratch diag-proxy.mjs): a stream taken straight from :5178 closes
-      // 927ms after the process dies — which is the drop EventSource retries
-      // from — while the same stream through Vite's proxy on :5173 stays open in
-      // the browser for over a minute with a dead upstream, so no error fires at
-      // all and the stream is silently deaf until the next repo switch. Nothing
-      // here can detect that: the backend's 25s heartbeat is an SSE *comment*
-      // (`: ping`), and comments are not surfaced to script by EventSource, so
-      // there is no liveness signal to time out against. The fix is one word in
-      // server.ts's heartbeat — a named event instead of a comment — not a poll
-      // bolted on here.
+      // NOTE, because it costs an hour to rediscover: when the *backend*
+      // restarts under `pnpm dev`, neither branch of this handler runs.
+      // Measured: a stream read straight from :5178 errors ~2.5s after the
+      // process dies — the drop EventSource retries from — while the same
+      // stream through Vite's proxy on :5173 stays open over a dead upstream
+      // for 20s+ with no error event at all. That is why the silence watchdog
+      // above exists and is not redundant with this handler: a stream can be
+      // dead without ever being *errored*, and the only symptom left is that
+      // the server's heartbeat stopped arriving.
 
       // CLOSED means the browser has given up permanently, which per the
       // EventSource spec is what *any* non-200 response causes — and a restarted
@@ -99,6 +127,7 @@ export function watchRepo(repoId: string, onRefsChanged: () => void): LiveStream
     close(): void {
       closed = true;
       clearTimeout(timer);
+      clearTimeout(silenceTimer);
       source?.close();
       source = null;
     },
