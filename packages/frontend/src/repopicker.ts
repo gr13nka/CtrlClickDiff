@@ -14,6 +14,7 @@
 
 import type { BrowseEntry, BrowseListing, RepoEntry } from '@ctrlclickdiff/shared';
 import { api } from './api';
+import { createModal } from './modal';
 
 /** A repo the user has opened before. Shape of one `ccd.recentRepos` element. */
 export interface RecentRepo {
@@ -91,14 +92,9 @@ export function openRepoPicker({ onPick }: RepoPickerOptions): void {
   let listing: BrowseListing | null = null;
   let selected: BrowseEntry | null = null;
 
-  const backdrop = document.createElement('div');
-  backdrop.className = 'ccd-modal-backdrop';
-
-  const modal = document.createElement('div');
-  modal.className = 'ccd-modal';
-  modal.role = 'dialog';
-  modal.ariaModal = 'true';
-  modal.ariaLabel = 'Open repository';
+  // No variant: this is the plain panel, not a `.ccd-palette`. It is a form
+  // with a browse list, not a search over rows.
+  const modal = createModal({ label: 'Open repository' });
 
   const title = document.createElement('div');
   title.className = 'ccd-modal-title';
@@ -137,7 +133,7 @@ export function openRepoPicker({ onPick }: RepoPickerOptions): void {
   cancelBtn.className = 'ccd-btn';
   cancelBtn.type = 'button';
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.addEventListener('click', close);
+  cancelBtn.addEventListener('click', () => modal.close());
 
   const openBtn = document.createElement('button');
   openBtn.className = 'ccd-btn ccd-btn-primary';
@@ -149,32 +145,10 @@ export function openRepoPicker({ onPick }: RepoPickerOptions): void {
   });
 
   foot.append(message, cancelBtn, openBtn);
-  modal.append(title, recentsEl, nav, list, foot);
-  backdrop.append(modal);
+  modal.panel.append(title, recentsEl, nav, list, foot);
 
-  // Click-outside and Escape both close, because a modal that can only be
-  // dismissed by finding its Cancel button is a trap on a narrow window.
-  backdrop.addEventListener('mousedown', (e) => {
-    if (e.target === backdrop) close();
-  });
-  // Captured, and the key consumed, for the reason commitpalette.ts states for
-  // the same handler: a modal is the topmost thing on screen, so Escape belongs
-  // to it before anything underneath treats it as its own. In the bubble phase
-  // whatever holds focus gets first refusal — and Monaco binds Escape on its
-  // own DOM node, so the moment this picker is reachable with the editor
-  // focused, the bubble version stops closing it.
-  const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      close();
-    }
-  };
-  document.addEventListener('keydown', onKeyDown, true);
-
-  function close(): void {
-    document.removeEventListener('keydown', onKeyDown, true);
-    backdrop.remove();
-  }
+  // No onKeyDown: this modal has no keyboard-driven list, so Escape — which
+  // modal.ts owns — is the whole of its key handling.
 
   // The resting state of the message line is the one thing the picker cannot
   // show any other way: double-click descends, and a gesture has no label.
@@ -203,7 +177,7 @@ export function openRepoPicker({ onPick }: RepoPickerOptions): void {
       renderRecents();
       return;
     }
-    close();
+    modal.close();
     onPick(entry);
   }
 
@@ -350,7 +324,7 @@ export function openRepoPicker({ onPick }: RepoPickerOptions): void {
     recentsEl.append(recentList);
   }
 
-  document.body.append(backdrop);
+  modal.open();
   renderRecents();
   // No argument: browsing always starts at the backend's browse root, which is
   // the one directory guaranteed to be reachable.

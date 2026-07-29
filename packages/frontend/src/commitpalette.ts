@@ -18,6 +18,7 @@
 // which means whoever holds it must hold its metadata too.
 
 import type { CommitInfo } from '@ctrlclickdiff/shared';
+import { createModal } from './modal';
 
 export interface CommitPaletteOptions {
   /** The current ref's log, newest-first, as `GET /api/commits` returned it. */
@@ -98,14 +99,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
   // should cost one preview fetch, not four.
   const working = new Set(selected.map((c) => c.sha));
 
-  const backdrop = document.createElement('div');
-  backdrop.className = 'ccd-modal-backdrop';
-
-  const modal = document.createElement('div');
-  modal.className = 'ccd-modal ccd-palette';
-  modal.role = 'dialog';
-  modal.ariaModal = 'true';
-  modal.ariaLabel = 'Select commits';
+  const modal = createModal({ label: 'Select commits', variant: 'ccd-palette', onKeyDown });
 
   const header = document.createElement('div');
   header.className = 'ccd-palette-header';
@@ -179,23 +173,11 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
 
   foot.append(hint, previewButton);
 
-  modal.append(header, modeRow, explainer, list, foot);
-  backdrop.append(modal);
-
-  // Click-outside and Escape both close, because a modal that can only be
-  // dismissed by finding its Cancel button is a trap on a narrow window.
-  backdrop.addEventListener('mousedown', (e) => {
-    if (e.target === backdrop) close();
-  });
-
-  function close(): void {
-    document.removeEventListener('keydown', onKeyDown, true);
-    backdrop.remove();
-  }
+  modal.panel.append(header, modeRow, explainer, list, foot);
 
   /** Single-select: choosing a row IS the choice, so it applies and closes. */
   function apply(commit: CommitInfo): void {
-    close();
+    modal.close();
     // Unchanged selections are not reported: re-applying would restart the
     // preview fetch and throw away the scroll position in the diff the user was
     // reading, for no change at all.
@@ -214,7 +196,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
   function applyWorking(): void {
     const next = all.filter((c) => working.has(c.sha));
     if (next.length === 0) return;
-    close();
+    modal.close();
     if (sameShas(next, selected)) return;
     onApply(next);
   }
@@ -251,7 +233,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
 
   function renderMode(): void {
     ghostToggle.ariaPressed = String(ghost);
-    modal.classList.toggle('ghost', ghost);
+    modal.panel.classList.toggle('ghost', ghost);
 
     const count = working.size;
     modeHint.textContent = ghost
@@ -270,16 +252,12 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
   }
 
   /**
-   * Captured on the document rather than bound to the modal, so the keys work
-   * wherever focus happens to be — and in the capture phase so Escape reaches
-   * this before anything below it in the page treats it as its own.
+   * Every key but Escape — modal.ts captures on the document and handles that
+   * one, then hands the rest here untouched. This palette's key model (ticking
+   * with Space, Home/End, Enter meaning two different things by mode) stays in
+   * this file, which is the whole point of the split.
    */
   function onKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      close();
-      return;
-    }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       move(e.key === 'ArrowDown' ? 1 : -1);
@@ -444,8 +422,7 @@ export function openCommitPalette({ commits, selected, onApply }: CommitPaletteO
     return item;
   }
 
-  document.addEventListener('keydown', onKeyDown, true);
-  document.body.append(backdrop);
+  modal.open();
 
   // Open on the current selection rather than at the top: the reviewer's
   // relationship is with where they are, and the commit they most often want is

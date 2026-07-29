@@ -6,13 +6,13 @@
 // to narrow it but type-ahead on a prefix. Searching is the whole reason this
 // exists; the visual consistency with commitpalette.ts is the other half.
 //
-// Shares that file's DOM contract (.ccd-palette and friends) rather than its
-// code. What the two actually have in common is a backdrop, an Escape handler
-// and an active-row index — and each has a different notion of a row, of a
-// group, and of what choosing one means. See the note at the foot of this file
-// before reaching for a shared abstraction.
+// Shares that file's DOM contract (.ccd-palette and friends) and modal.ts's
+// shell, but not its code. Each has a different notion of a row, of a group,
+// and of what choosing one means. See the note at the foot of this file before
+// reaching for a shared palette abstraction.
 
 import type { BranchInfo } from '@ctrlclickdiff/shared';
+import { createModal } from './modal';
 
 export interface BranchPaletteOptions {
   branches: BranchInfo[];
@@ -39,14 +39,7 @@ export function openBranchPalette({ branches, selectedRef, onPick }: BranchPalet
   let activeIndex = 0;
   let visible: BranchInfo[] = ordered;
 
-  const backdrop = document.createElement('div');
-  backdrop.className = 'ccd-modal-backdrop';
-
-  const modal = document.createElement('div');
-  modal.className = 'ccd-modal ccd-palette';
-  modal.role = 'dialog';
-  modal.ariaModal = 'true';
-  modal.ariaLabel = 'Select branch';
+  const modal = createModal({ label: 'Select branch', variant: 'ccd-palette', onKeyDown });
 
   const header = document.createElement('div');
   header.className = 'ccd-palette-header';
@@ -74,20 +67,10 @@ export function openBranchPalette({ branches, selectedRef, onPick }: BranchPalet
   hint.textContent = '↑↓ to move · Enter to open · Esc to close';
   foot.append(hint);
 
-  modal.append(header, list, foot);
-  backdrop.append(modal);
-
-  backdrop.addEventListener('mousedown', (e) => {
-    if (e.target === backdrop) close();
-  });
-
-  function close(): void {
-    document.removeEventListener('keydown', onKeyDown, true);
-    backdrop.remove();
-  }
+  modal.panel.append(header, list, foot);
 
   function pick(branch: BranchInfo): void {
-    close();
+    modal.close();
     // Re-picking the current ref would reload its log and throw away the
     // selection and the diff the user is reading, to arrive back where they are.
     if (branch.ref === selectedRef) return;
@@ -95,11 +78,6 @@ export function openBranchPalette({ branches, selectedRef, onPick }: BranchPalet
   }
 
   function onKeyDown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      close();
-      return;
-    }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       if (visible.length === 0) return;
@@ -200,9 +178,11 @@ export function openBranchPalette({ branches, selectedRef, onPick }: BranchPalet
     return item;
   }
 
-  document.addEventListener('keydown', onKeyDown, true);
-  document.body.append(backdrop);
+  modal.open();
 
+  // After open(), not before: renderList() scrolls the active row into view,
+  // and scrollIntoView on a detached element is a silent no-op — which would
+  // land the palette at the top of the list instead of on the current ref.
   const openAt = ordered.findIndex((b) => b.ref === selectedRef);
   activeIndex = openAt === -1 ? 0 : openAt;
   renderList();
@@ -214,19 +194,29 @@ function byHeadThenName(a: BranchInfo, b: BranchInfo): number {
   return a.name.localeCompare(b.name);
 }
 
-// ON NOT EXTRACTING A SHARED PALETTE — measured, not assumed. What this file and
-// commitpalette.ts genuinely share is: build a backdrop, close on Escape and on
-// a click outside, keep an active index, clamp it, scroll it into view. That is
-// about 40 lines, and it is the part least likely to change.
+// ON NOT EXTRACTING A SHARED PALETTE — measured, not assumed, and still the
+// position. The rows are different shapes (three columns and a pin badge
+// against a marker, a name and a group header); the searches match different
+// fields; choosing means different things (a selection that may hold several
+// commits against a single ref); and the commit palette has a mode toggle and a
+// footer action this one has no use for. A generic palette taking row
+// renderers, a search projection, group predicates and footer slots would be
+// more code than the duplication it removes, and every future change to either
+// palette would have to be negotiated through it. That has not been done.
 //
-// Everything that looks shared is not. The rows are different shapes (three
-// columns and a pin badge against a marker, a name and a group header); the
-// searches match different fields; choosing means different things (a selection
-// that may hold several commits against a single ref); and the commit palette
-// has a mode toggle and a footer action this one has no use for. A generic
-// palette taking row renderers, a search projection, group predicates and
-// footer slots would be more code than the duplication it removes, and every
-// future change to either palette would have to be negotiated through it.
+// What HAS been extracted is modal.ts — the backdrop, the labelled panel, the
+// click-outside and the Escape handler, and nothing else. That is the "build a
+// backdrop, close on Escape" half of what this note originally listed as
+// shared; the other half (the active index, the clamp, the scroll into view)
+// stayed here and in commitpalette.ts on purpose, because sharing it would need
+// the shell to know each palette's `visible.length` and to call back into its
+// renderer, which is the first concession the argument above is about.
 //
-// If a third palette appears, revisit — three is where the shared shape stops
-// being a guess. Until then this is the cheaper of the two kinds of complexity.
+// The trigger for that extraction was not a third palette. It was the repo
+// picker — a third *modal*, which is a different claim — plus evidence the
+// duplication had stopped being harmless: the three copies had drifted, two
+// capturing Escape and consuming it while the third bubbled and did not.
+//
+// The revisit trigger for the palette itself is unchanged: a third palette.
+// Three is where the shared shape stops being a guess. Until then this is the
+// cheaper of the two kinds of complexity.
