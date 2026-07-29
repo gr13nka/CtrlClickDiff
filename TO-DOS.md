@@ -1,7 +1,27 @@
 # TO-DOS
 
-Nothing open. The backlog captured on 2026-07-23 is fully implemented — see the section below
+Nothing open. The backlog captured on 2026-07-23 is fully implemented — see the sections below
 for what each item became, and `CLAUDE.md` for the constraints that fell out of building them.
+
+## Shipped — 2026-07-29 (ghost squash)
+
+- **Ghost squash** — select several commits and read them as one combined diff, **skipping any
+  of them**. Nothing is rewritten; both sides of every file's diff are revisions already in the
+  object database, which is why peek and the symbol index needed no changes. Commits may be left
+  out of the middle of a range: a docs-only commit disappears from a review of the code around
+  it. The one case that cannot be exact — a file edited by both a selected and a skipped commit —
+  is shown and marked ⚠ rather than hidden. See `preview.ts` and the design notes in `CLAUDE.md`.
+- **The sidebar's four stacked pickers became a header breadcrumb** — `repo › branch › selection`
+  — with the view toggles on the right. The sidebar is now only the changed-file tree.
+- **Both `<select>`s became searchable palettes.** The app contains no `<select>` at all. The
+  commit palette searches sha/subject/author at once and is where ghost squash is armed; the
+  branch palette groups Local before Remote and marks the checked-out ref.
+- **`/api/commit/:sha/files` became `/api/preview?shas=<csv>`.** A selection of one commit is the
+  ordinary single-commit review, so there is no per-commit route beside it.
+
+Known and deliberate: a ghost squash whose files sit at different head revisions builds one
+tree-sitter index per distinct revision rather than one. The index is lazy and cached per rev, so
+the cost is only paid for revisions actually Ctrl+clicked into.
 
 ## Shipped — 2026-07-29
 

@@ -13,9 +13,11 @@ no build step**, and `packages/shared` is consumed as raw `.ts` source (`"export
 
 ```
 packages/shared     wire types + the SymbolResolver contract
-packages/backend    Fastify. server.ts (routes) git.ts (all git) repos.ts browse.ts watch.ts
+packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (what a commit
+                    selection means) repos.ts browse.ts watch.ts
                     resolver/TreeSitterResolver.ts (tree-sitter symbol index)
 packages/frontend   Vite + Monaco. shell.ts (all UI state) diff.ts defprovider.ts api.ts
+                    topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
                     filetree.ts repopicker.ts live.ts theme.ts; ALL CSS is inline in index.html
 vendor/             prebuilt tree-sitter-kotlin.wasm (no upstream prebuild exists)
 fixtures/           make-sample-repo.sh — generates the two test repos
@@ -24,7 +26,13 @@ m1-spike/           throwaway CDN spike, kept as historical evidence. Not built 
 
 `shell.ts` is the spine: it owns every piece of frontend state and nearly every change touches
 it. New logic belongs in its own module with a small interface, so `shell.ts` gains a call site
-rather than another screenful.
+rather than another screenful. The header, both palettes and the repo picker each follow that
+rule — `topbar.ts` in particular knows nothing about repos, branches or commits, because its
+interface is `setCrumbs(Crumb[])` and a crumb is only a label, a tooltip and a click handler.
+
+The unit of review is a **selection of commits**, not a commit. One commit selected is the
+ordinary case; several is a "ghost squash" (see below). There is deliberately no second code
+path for the single-commit case — `Preview` describes both.
 
 ## Verification
 
@@ -40,6 +48,20 @@ Behaviour is verified **in a real browser**. Most of what matters here — peek 
 a diff, region auto-expansion on a jump, drag-resize relayout — has no meaningful assertion
 outside one. Drive Chromium over CDP; Node 22 has a global `WebSocket`, so this needs no
 dependencies. Note snap-confined Chromium needs `--no-sandbox` and a profile dir it can reach.
+
+**Peek can only be tested by the gesture.** `editor.getAction('editor.action.revealDefinition')`
+returns **null** in this standalone Monaco build — the only definition-ish action it registers is
+`showDefinitionPreviewHover`. Peek comes from `definitionLinkOpensInPeek` plus a real Ctrl+click,
+so a CDP test must compute the word's viewport position
+(`editor.getScrolledVisiblePosition()` plus `getDomNode().getBoundingClientRect()`) and dispatch
+`Input.dispatchMouseEvent` with `modifiers: 2` — a `mouseMoved` first, which is what makes Monaco
+resolve and underline the link, then the press/release. Assert on a `.zone-widget` appearing.
+Testing an action id instead passes vacuously and proves nothing.
+
+**Do not `import()` a frontend module from the CDP console to test it.** Vite serves HMR-updated
+modules under a `?t=<stamp>` URL, so a fresh `import('/src/api.ts')` can hand back a *second*
+instance with its own module state — `api.ts`'s `pathById` comes up empty and the 409 recovery
+appears broken when it is not. Drive the real UI and let the app's own instance do the work.
 
 When you fix a bug, **reproduce it first and record the numbers**. Several fixes in the history
 would have been unfalsifiable otherwise — "the reveal is wrong" means nothing next to "it
@@ -82,12 +104,68 @@ the SSE heartbeat is a named `ping` event and not a `: ping` comment — EventSo
 surfaces comments to script, so a comment gives the client nothing to time out against.
 `live.ts` runs a silence watchdog on it.
 
-**No raw control bytes in source.** Two files have already had to be repaired: a literal NUL in
+**No raw control bytes in source.** Three files have now had to be repaired: a literal NUL in
 a template literal makes git classify the file as *binary*, so `git diff` and `grep` stop
-working on it. Write the escape sequence (`\u0000`), never the byte.
+working on it. Write the escape sequence (`\u0000`), never the byte. `grep` reporting
+"binary file matches" on a `.ts` file is the symptom; this is the check, and it is worth
+running before any commit that touched a template literal:
+
+```bash
+python3 -c "import io,glob;print([p for p in glob.glob('packages/**/*.ts',recursive=True) \
+  if any(c<9 or (10<c<32 and c!=13) for c in io.open(p,'rb').read())] or 'clean')"
+```
+
+**`--not` is rejected after `--end-of-options`; `^<sha>` is not.** Both exclude commits from a
+`git log` walk, but only the caret form is *revision* syntax — `--not` is an option, and
+everything after `--end-of-options` is by definition not one (`fatal: bad revision '--not'`).
+`commitSpan` needs both the fence and the exclusion, so it uses `^<sha>`.
+
+**`git log --name-status` prints no files at all for a merge commit** unless
+`--diff-merges=first-parent` (git >= 2.31) is passed. Without it a selected merge silently
+contributes nothing to a preview, and an unselected one is never spotted as a source of leaked
+edits — "invisible" is the wrong default for a review tool. First-parent because that is the
+"what did this bring onto the branch" side, which is the question a reviewer is asking.
+
+**`git log --no-walk` sorts a set of commits rather than walking history**, and fails the whole
+invocation on the first unknown SHA. That is two jobs in one call — `orderCommits` uses it both
+to put a selection in newest-first order and to prove every commit in it exists, so a stale tab
+after a force-push produces one clean rejection instead of a preview computed from the
+survivors. It is `log` and not `rev-list` purely to keep the permitted-subcommand list short.
 
 ## Decisions worth not undoing
 
+- **A preview's revision pair is per FILE, not per selection.** For each path,
+  `base = first parent of the earliest selected commit that touched it`, `head = the latest
+  selected commit that touched it` (`preview.ts`). This is the whole reason commits can be
+  skipped out of the middle of a range: everything the selection did to a path happened between
+  those two points, so a path only unselected commits touched vanishes from the review, and a
+  path an early selected commit touched is shown as *that* commit left it. A single span shared
+  by every file would drag every unselected commit's edits into files the selection merely
+  brackets — the docs-only commit would still be visible in the code files it never touched.
+- **Both sides of a preview are revisions that already exist.** That is what keeps `/api/file`,
+  the tree-sitter index and Ctrl+click peek ignorant of the whole feature — they take a rev and a
+  path, and a preview hands them revs they already understand. Synthesising a tree for a
+  selection would need `git merge-tree --write-tree`, which **writes objects into
+  `.git/objects`** and would end the read-only guarantee. Do not reach for it.
+- **A file touched by both a selected and a skipped commit is shown, and marked.**
+  `A -> (unselected edit) -> A'` has no two-SHA representation, so those edits are unavoidably in
+  that file's diff. `PreviewFile.skippedShas` names the commits responsible and the sidebar row
+  gets a ⚠ whose tooltip lists them by subject. Hiding the file instead would drop a changed file
+  from a review, which is the same hazard that keeps tree-collapse state out of localStorage.
+  Naming rather than counting is deliberate: a count says something is off without saying what to
+  do about it.
+- **Live refresh follows the tip only from a selection of ONE that is the tip.** A multi-commit
+  selection is a deliberate act, and "the tip moved" says nothing about whether the new commit
+  belongs in a set assembled by hand. The single-commit rule is unchanged and has its own
+  reasoning in `refreshRefs`.
+- **The two palettes do not share an abstraction, and that was measured, not assumed.** What
+  `commitpalette.ts` and `branchpalette.ts` actually share is a backdrop, an Escape handler and a
+  clamped active index — about 40 lines, and the part least likely to change. The rows are
+  different shapes, the searches match different fields, and choosing means different things (a
+  selection that may hold several commits, against a single ref). A generic palette taking row
+  renderers, a search projection, group predicates and footer slots is more code than the
+  duplication it removes. The revisit trigger is a **third** palette; the full argument is at the
+  foot of `branchpalette.ts`.
 - **Repo scoping is stateless.** There is no "current repo" on the server; every data route
   takes `?repo=<id>`. That is what removes cache invalidation, cross-tab interference, and the
   restart-to-switch problem in one move. The registry is an append-only *validated-path* store,
@@ -119,11 +197,14 @@ working on it. Write the escape sequence (`\u0000`), never the byte.
 
 This is a guarantee, not an aspiration, and the README states it publicly — so re-check it when
 you touch the backend. Every git call goes through `git.ts`'s `run()` with an **argument array,
-never a shell string**. The only subcommands invoked anywhere are `log`, `rev-parse`,
-`diff-tree`, `ls-tree`, `for-each-ref`, `show`. There is no write-capable fs API in the backend
-at all — the whole surface is `readFile`, `realpath`, `stat`, `readdir`, `existsSync`, `fs.watch`.
-`listCommits` carries three redundant injection guards (leading-`-` rejection,
+never a shell string**. The only subcommands invoked anywhere are `log`, `rev-parse`, `ls-tree`,
+`for-each-ref`, `show` — `diff-tree` left the codebase when `commitSpan` replaced the per-commit
+`changedKtFiles`, and nothing should bring it back. There is no write-capable fs API in the
+backend at all — the whole surface is `readFile`, `realpath`, `stat`, `readdir`, `existsSync`,
+`fs.watch`. `listCommits` carries three redundant injection guards (leading-`-` rejection,
 `--end-of-options`, trailing `--`) plus a route-level whitelist pattern; keep all of them.
+`/api/preview` follows the same shape: `shas` is whitelisted at the route as
+`^[0-9a-f]{40}(,[0-9a-f]{40})*$` before it can reach git's argv, and capped at 100 entries.
 
 ## Commits
 
