@@ -444,6 +444,10 @@ export async function openFile(path: string): Promise<void> {
     console.debug(`[ccd] openFile: "${path}" is not one of this selection's changed files`);
   }
   const e = beginEpoch();
+  // Highlighted before the load rather than after it, so the click has feedback
+  // for the whole round trip — and rolled back in the catch, because a sidebar
+  // that names a file the diff pane is not showing is worse than a slow one.
+  const previousPath = activePath;
   activePath = path;
   highlightActiveRow();
   const revs = revsFor(path);
@@ -454,7 +458,14 @@ export async function openFile(path: string): Promise<void> {
     // one the user is waiting on, and every caller turns a throw into a
     // status message — so swallowing it here is what keeps the winner's
     // status line intact.
+    //
+    // The rollback below therefore runs on the winner's path only, and that
+    // ordering is the whole guarantee: a stale call must leave `activePath`
+    // alone, since a newer openFile already owns it and reverting here would
+    // point the sidebar at a file two calls ago.
     if (stale(e)) return;
+    activePath = previousPath;
+    highlightActiveRow();
     throw err;
   }
 }
