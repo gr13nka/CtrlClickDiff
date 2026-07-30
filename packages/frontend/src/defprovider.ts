@@ -6,9 +6,10 @@
 //
 //  1. Monaco calls provideDefinition TWICE per Ctrl+click — once to decide
 //     whether to underline the word as a link on hover, once to actually
-//     resolve it on click. The provider must be cheap/idempotent: file
-//     fetches are memoized per (rev, path) so a single click never issues
-//     the same GET /api/file twice.
+//     resolve it on click. The provider must be cheap/idempotent, so BOTH
+//     network calls are coalesced: file fetches are memoized per (rev, path),
+//     and /api/def is deduped while in flight. A single click issues one of
+//     each. Both provider bodies still run in full — see coalescedDef.
 //  2. Cross-file peek only renders if the *target* model already exists in
 //     monaco's model registry by the time provideDefinition returns. So
 //     every DefLocation we get back has its model eagerly built (via
@@ -45,6 +46,86 @@ function memoizedFile(repoId: string, rev: string, path: string): Promise<string
   return pending;
 }
 
+/**
+ * At most this many memoized /api/def answers, least-recently-used evicted
+ * first. Small on purpose: an entry is one short DefLocation[], and the working
+ * set is "words the reader pointed at recently", not the repository.
+ */
+const DEF_CACHE_LIMIT = 256;
+
+/**
+ * Memoizes GET /api/def so one Ctrl+click issues one request rather than two.
+ *
+ * Monaco calls the provider TWICE per click (file header, fact 1) — once to
+ * decide whether to underline the word as a link on hover, once to resolve it
+ * on click — and both calls used to reach the network.
+ *
+ * Storing the PROMISE is what covers both shapes of that pair, and measuring is
+ * what showed both are needed. When the two calls overlap — a slow resolve,
+ * which is exactly when a duplicate hurts most — the second joins the first
+ * instead of racing it. When they do NOT overlap, which is the ordinary case
+ * (measured ~1s apart over CDP, because the hover resolves long before the
+ * mouse goes down), only a retained answer removes the second request. An
+ * in-flight-only map was written first and measured: it left the count at two.
+ *
+ * Retaining is sound because the key names immutable content:
+ * (repoId, rev, file, line, name) is a question about one revision, and a
+ * revision does not change. Same reason the backend's per-file symbol cache has
+ * no TTL and diff.ts never disposes a model — an entry cannot become wrong, only
+ * surplus, so a bound rather than an expiry is what keeps it honest. Unlike
+ * fileCache above this one HAS a bound: a fileCache entry backs a Monaco model
+ * that is itself permanent, so those two share a lifetime, whereas a def answer
+ * has no such anchor and would otherwise accumulate one entry per word ever
+ * pointed at.
+ *
+ * `line` is in the key even though the current resolver ignores it, because
+ * DefQuery.line documents that a scope-aware implementation is expected to use
+ * it. Both calls of one gesture share a position, so including it costs nothing
+ * and stops the key becoming a lie later.
+ *
+ * This memoizes the FETCH only. Both provider calls still run their bodies:
+ * each builds the target models, and each calls applyPeekScope, whose sampling
+ * point peekscope.ts documents as load-bearing. Returning early from the second
+ * call would leave the scope unset and silently break the out-of-review nudge.
+ */
+const defCache = new Map<string, Promise<DefLocation[]>>();
+
+function memoizedDef(params: {
+  repoId: string;
+  name: string;
+  file: string;
+  line: number;
+  rev: string;
+}): Promise<DefLocation[]> {
+  const { repoId, name, file, line, rev } = params;
+  const key = [repoId, rev, file, line, name].join('\u0000');
+
+  const cached = defCache.get(key);
+  if (cached) {
+    // Map iterates in insertion order, so delete+set is the whole LRU.
+    defCache.delete(key);
+    defCache.set(key, cached);
+    return cached;
+  }
+
+  // A rejection must NOT stay cached: a failed fetch is not an answer, and the
+  // provider degrades it to "no definition found". Leaving it in would make one
+  // network blip permanent for that word.
+  const pending = api.def(params).catch((err) => {
+    defCache.delete(key);
+    throw err;
+  });
+  defCache.set(key, pending);
+
+  while (defCache.size > DEF_CACHE_LIMIT) {
+    const oldest = defCache.keys().next().value;
+    if (oldest === undefined) break;
+    defCache.delete(oldest);
+  }
+
+  return pending;
+}
+
 let registered = false;
 
 /**
@@ -75,7 +156,7 @@ export function registerDefinitions(inReview: InReview): void {
 
       let defs: DefLocation[];
       try {
-        defs = await api.def({ repoId, name: word.word, file: path, line: position.lineNumber, rev });
+        defs = await memoizedDef({ repoId, name: word.word, file: path, line: position.lineNumber, rev });
       } catch (err) {
         // Network/server error is not a "no definition found" — but Monaco
         // has no distinct signal for the two, so log and degrade to "none".
