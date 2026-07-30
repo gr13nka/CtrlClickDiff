@@ -90,17 +90,27 @@ export function registerDefinitions(inReview: InReview): void {
       const inside: monaco.languages.Location[] = [];
       const outside: monaco.languages.Location[] = [];
 
-      for (const loc of defs) {
+      // All at once, not one per iteration. This await used to sit inside the
+      // loop below, which made an ambiguous name cost one sequential round trip
+      // per candidate *file* before the peek could render — 35 of them for
+      // `render` on lets-plot. memoizedFile still collapses two locations in the
+      // same file to a single fetch, and Promise.all preserves order.
+      const sources = await Promise.all(defs.map((loc) => memoizedFile(repoId, rev, loc.path)));
+
+      for (const [index, loc] of defs.entries()) {
         // Same repo as the model the click started in: a definition never
         // crosses repositories, so the id travels straight through.
         const uriStr = modelUri(repoId, rev, loc.path);
         // REQUIRED for cross-file peek (see file header, fact 2): build the
         // target model before returning, from the *same* memoized fetch a
-        // second provideDefinition call for this click would reuse.
+        // second provideDefinition call for this click would reuse. Still built
+        // inside the loop, in defs order — these models are what make cross-file
+        // peek render at all.
+        //
         // Same language as the model the click started in — a definition is
         // resolved within the language of the file it was asked from, so the
         // target's language is known without consulting the registry again.
-        getOrCreateModel(uriStr, await memoizedFile(repoId, rev, loc.path), model.getLanguageId());
+        getOrCreateModel(uriStr, sources[index]!, model.getLanguageId());
         const location = {
           uri: monaco.Uri.parse(uriStr),
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)
