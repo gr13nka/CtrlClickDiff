@@ -173,7 +173,7 @@ export function initShell(rootEl: HTMLElement): void {
   sidebar.append(status, list);
 
   // Occupies the middle grid track between the two panes (see index.html's
-  // #app.ccd-app). The tooltip is the only place the double-click reset is
+  // .ccd-content). The tooltip is the only place the double-click reset is
   // discoverable — a 6px seam has nowhere to put a label.
   const resizer = document.createElement('div');
   resizer.className = 'ccd-resizer';
@@ -182,9 +182,19 @@ export function initShell(rootEl: HTMLElement): void {
   const diffPane = document.createElement('div');
   diffPane.className = 'ccd-diff-pane';
 
-  rootEl.append(topBar.el, sidebar, resizer, diffPane);
+  // The three columns live in their own box below the header rather than being
+  // rows of #app's grid. initResizer is handed *this* element and not rootEl
+  // because both things it does are relative to the grid it drives: it writes
+  // --ccd-sidebar-w on it, and it converts a pointer's clientX into a track
+  // width by subtracting the grid's own left edge. Point it at #app and the
+  // drag is offset by however far the columns start in from the viewport.
+  const content = document.createElement('div');
+  content.className = 'ccd-content';
+  content.append(sidebar, resizer, diffPane);
 
-  initResizer(rootEl, resizer);
+  rootEl.append(topBar.el, content);
+
+  initResizer(content, resizer);
 
   initDiff(diffPane);
 

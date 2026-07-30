@@ -71,14 +71,17 @@
       /* Shell layout, built by shell.ts's initShell(): a full-width header over
          a sidebar / resizer / diff-pane row.
 
-         The header spans all three columns because what it names scopes all
-         three: the files in the sidebar and the diff beside them belong to the
-         repository, ref and commits it shows. It is also why the header is a
-         row of the same grid rather than a flex child inside the diff column —
-         the sidebar must start below it, not beside it. */
+         Two nested boxes rather than one grid, and the split is deliberate.
+         #app owns the viewport and stacks header over content; .ccd-content owns
+         the three columns. The header stays a sibling of the whole column group
+         — not a cell beside the sidebar — because what it names scopes all of
+         them: the files in the sidebar and the diff beside them belong to the
+         repository, ref and commits it shows, so the sidebar must start below
+         it. Separating the two is also what lets the content row be narrowed and
+         centred without dragging the header in with it. */
       #app.ccd-app {
         display: grid;
-        grid-template-columns: var(--ccd-sidebar-w) 6px 1fr;
+        grid-template-columns: minmax(0, 1fr);
         grid-template-rows: var(--ccd-topbar-h) minmax(0, 1fr);
         width: 100vw;
         height: 100vh;
@@ -86,8 +89,19 @@
         color: var(--ccd-fg);
       }
 
+      /* The three-column row. --ccd-sidebar-w is written here by initResizer
+         (shell.ts hands it this element), which is also why the drag maths is
+         measured against this box: it is the one whose left edge the sidebar
+         track starts at. */
+      .ccd-content {
+        display: grid;
+        grid-template-columns: var(--ccd-sidebar-w) 6px minmax(0, 1fr);
+        width: 100%;
+        min-width: 0;
+        min-height: 0;
+      }
+
       .ccd-topbar {
-        grid-column: 1 / -1;
         display: flex;
         align-items: center;
         gap: 12px;
