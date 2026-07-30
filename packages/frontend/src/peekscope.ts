@@ -60,15 +60,23 @@ const STYLE_ID = 'ccd-peek-scope';
 let styleEl: HTMLStyleElement | null = null;
 
 /**
- * Points the peek list's styling at `scope`, replacing whatever the previous
- * gesture asked for, and — once a widget opens for it — moves the preview onto an
- * in-review candidate if Monaco chose one outside the review.
+ * Makes the next peek reflect `scope`, in the two ways a peek can be made to:
+ *
+ *  - it **styles** the candidate list, replacing whatever the previous gesture
+ *    asked for, and
+ *  - it **moves the preview** onto an in-review candidate, once a widget opens,
+ *    if Monaco chose one outside the review.
+ *
+ * The second is worth the emphasis: this call ends in synthetic clicks on
+ * Monaco's own list, which is not something a name alone can be expected to
+ * carry. It was called `markPeekScope` for exactly as long as it took someone to
+ * read the call site and believe it only wrote CSS.
  *
  * Called on every `provideDefinition`, which means twice per Ctrl+click and once
  * per Ctrl+hover, so both halves stay cheap: two CSS rules rewritten wholesale,
  * and a poll that is bounded in time and does nothing at all when no peek appears.
  */
-export function markPeekScope(scope: PeekScope): void {
+export function applyPeekScope(scope: PeekScope): void {
   latest = scope;
   sheet().textContent = rulesFor(scope);
   watchForPeek();
@@ -167,7 +175,7 @@ function cssString(value: string): string {
 // attempt per widget, and any surprise leaves Monaco's choice standing.
 // ---------------------------------------------------------------------------
 
-/** How long a `markPeekScope` call keeps looking for a widget to nudge. */
+/** How long an `applyPeekScope` call keeps looking for a widget to nudge. */
 const WATCH_MS = 1500;
 
 /** Frames to let Monaco's own reveal finish after it has selected a row. */

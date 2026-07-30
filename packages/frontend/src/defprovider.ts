@@ -26,7 +26,7 @@ import * as monaco from 'monaco-editor';
 import type { DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { getOrCreateModel, modelUri, parseModelUri } from './diff';
-import { markPeekScope } from './peekscope';
+import { applyPeekScope } from './peekscope';
 
 // Memoizes GET /api/file per "<repoId>/<rev>/<path>" so the two
 // provideDefinition calls per click (see file header, fact 1) never
@@ -108,7 +108,7 @@ export function registerKotlinDefinitions(inReview: InReview): void {
       // The URIs, not labels for them: how a candidate is named in the peek list
       // is that widget's business, and peekscope.ts is the only file that should
       // have to know it.
-      markPeekScope({ inReview: inside.map((l) => l.uri), outside: outside.map((l) => l.uri) });
+      applyPeekScope({ inReview: inside.map((l) => l.uri), outside: outside.map((l) => l.uri) });
 
       // In-review first, and a stable partition, so the resolver's same-file
       // hits stay ahead of its cross-file ones inside each half. This decides
