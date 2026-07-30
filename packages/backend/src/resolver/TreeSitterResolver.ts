@@ -159,12 +159,20 @@ export class TreeSitterResolver implements SymbolResolver {
    * a real branch and would otherwise read as a bug.
    */
   async resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]> {
+    const startedAt = performance.now();
     const language = languageForPath(query.file);
     const grammar = language && this.grammars.get(language.id);
     if (!language || !grammar) return [];
 
     const candidates = await candidateFiles(
       repoRoot, revision, query.name, language.extensions, language.nonDeclaringLineKeywords,
+    );
+    const grepMs = performance.now() - startedAt;
+    // How many of the candidates still have to be read and parsed. Counted
+    // before the pool runs, because symbolsFor moves entries around as it goes.
+    const cached = candidates.reduce(
+      (n, path) => n + (this.fileSymbols.has(symbolsKey(repoRoot, revision, path)) ? 1 : 0),
+      0,
     );
 
     // Partitioned BEFORE the reads, not after. The read pool finishes out of
@@ -187,7 +195,22 @@ export class TreeSitterResolver implements SymbolResolver {
       return symbols.get(query.name) ?? [];
     });
 
-    return perFile.flat();
+    const hits = perFile.flat();
+
+    // One line per resolve, with the split that says WHICH half is slow. `grep`
+    // is candidate discovery, `parse` is read+parse of the ones not already
+    // cached — and on a blobless clone `grep` is also where a lazy blob fetch
+    // would land, so a grep time far above the usual ~30ms means the network,
+    // not this code. Logged unconditionally because the question it answers
+    // ("why was that click slow?") is only ever asked after the fact.
+    const totalMs = performance.now() - startedAt;
+    console.log(
+      `[resolver] ${query.name} in ${totalMs.toFixed(0)}ms ` +
+        `(grep ${grepMs.toFixed(0)}ms -> ${candidates.length} candidates, ` +
+        `${cached} cached, parse ${(totalMs - grepMs).toFixed(0)}ms) -> ${hits.length} hits`,
+    );
+
+    return hits;
   }
 
   /** Cached `readSymbols`, moving the entry to the end of the LRU on every hit. */
