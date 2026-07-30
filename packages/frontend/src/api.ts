@@ -168,13 +168,15 @@ export const api = {
   },
 
   /**
-   * GET /api/def?name=<name>&file=<path>&line=<lineNumber>&lang=kotlin&rev=<rev>
+   * GET /api/def?name=<name>&file=<path>&line=<lineNumber>&rev=<rev>
    * -> ranked DefLocation[] (same-file hits first per the resolver; []
    * means "not found", never an error). Called from defprovider.ts's
    * provideDefinition, which Monaco invokes TWICE per Ctrl+click (once for
    * hover-link underlining, once for resolution) — see that file's
-   * memoizedFile() for how the double-call is kept cheap. lang is fixed to
-   * 'kotlin' here since that's the only language this MVP resolves.
+   * memoizedFile() for how the double-call is kept cheap.
+   *
+   * There is no `lang` parameter: the resolver derives it from `file`, because
+   * a definition is resolved within the language of the file it was asked from.
    *
    * `repoId` is as load-bearing as `rev`: the resolver indexes a revision *of a
    * repository*, and a bare SHA does not say which one.
@@ -193,7 +195,6 @@ export const api = {
       encodeURIComponent(params.file) +
       '&line=' +
       encodeURIComponent(String(params.line)) +
-      '&lang=kotlin' +
       '&rev=' +
       encodeURIComponent(params.rev);
     return getRepoJson<DefLocation[]>(params.repoId, '/api/def?' + qs);

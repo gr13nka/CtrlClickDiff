@@ -10,7 +10,16 @@ export type DefKind = 'class' | 'function' | 'constant' | 'type';
 export interface DefQuery {
   /** The identifier under the cursor, matched exactly. */
   name: string;
-  /** Repo-relative path the query was asked from — see `resolve`'s ranking rule. */
+  /**
+   * Repo-relative path the query was asked from — see `resolve`'s ranking rule.
+   *
+   * This also decides the language: **a definition is resolved within the
+   * language of the file you clicked in.** There used to be a `lang: 'kotlin'`
+   * field beside this one, carried by every layer and read by nothing. Deriving
+   * it is strictly better than declaring it, because a declared language can
+   * disagree with the file it names, and a field that can be derived is a field
+   * to delete rather than to widen.
+   */
   file: string;
   /**
    * 1-based line the query was asked from.
@@ -20,11 +29,6 @@ export interface DefQuery {
    * position. A scope-aware implementation is expected to.
    */
   line: number;
-  /**
-   * Also carried rather than used — 'kotlin' is the only value anything sends
-   * or accepts, and widening it is a change to every layer at once.
-   */
-  lang: 'kotlin';
 }
 
 /** Where a definition lives, in the coordinates an editor can jump to. */

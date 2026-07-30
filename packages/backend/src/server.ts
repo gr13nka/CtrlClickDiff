@@ -318,25 +318,28 @@ app.get<{ Querystring: { rev: string; path: string; repo?: string } }>(
   },
 );
 
-// GET /api/def?name=&file=&line=&lang=kotlin&rev=<sha> -> DefLocation[]
+// GET /api/def?name=&file=&line=&rev=<sha> -> DefLocation[]
+//
+// There is no `lang` parameter: the resolver derives the language from `file`,
+// because a definition is resolved within the language of the file it was asked
+// from. A client-declared language could disagree with the file it names.
 //
 // buildIndex is cached per-rev (no-op + no re-parse if `rev` was already
 // indexed by a prior /api/def or /api/index call), so this is cheap on the
 // second-and-later Ctrl+click for a given commit.
 app.get<{
-  Querystring: { name: string; file: string; line: number; lang: 'kotlin'; rev: string; repo?: string };
+  Querystring: { name: string; file: string; line: number; rev: string; repo?: string };
 }>(
   '/api/def',
   {
     schema: {
       querystring: {
         type: 'object',
-        required: ['name', 'file', 'line', 'lang', 'rev'],
+        required: ['name', 'file', 'line', 'rev'],
         properties: {
           name: { type: 'string', minLength: 1 },
           file: { type: 'string', minLength: 1 },
           line: { type: 'integer', minimum: 1 },
-          lang: { type: 'string', enum: ['kotlin'] },
           rev: { type: 'string', minLength: 1 },
           ...REPO_QUERY_PROPERTY,
         },
@@ -344,14 +347,14 @@ app.get<{
     },
   },
   async (request, reply): Promise<DefLocation[] | { error: string }> => {
-    const { name, file, line, lang, rev } = request.query;
+    const { name, file, line, rev } = request.query;
     const root = repoRootFor(request.query.repo);
     if (!root.ok) {
       reply.code(root.status);
       return root.body;
     }
     await resolver.buildIndex(root.root, rev);
-    return resolver.resolve(root.root, rev, { name, file, line, lang });
+    return resolver.resolve(root.root, rev, { name, file, line });
   },
 );
 

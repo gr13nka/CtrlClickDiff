@@ -422,7 +422,7 @@ Every data route takes an optional **`?repo=<id>`**; omitted, it falls back to t
 | `GET /api/commits?repo=&ref=` | `CommitInfo[]` — newest 100 on `ref` (default `HEAD`) |
 | `GET /api/preview?repo=&shas=` | what a commit selection means, per file |
 | `GET /api/file?repo=&rev=&path=` | file content at a revision (`""` for the missing side of an add or delete) |
-| `GET /api/def?repo=&name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found, several = ambiguous) |
+| `GET /api/def?repo=&name=&file=&line=&rev=` | `DefLocation[]` (empty = not found, several = ambiguous) |
 | `POST /api/index?repo=&rev=` | prewarm the symbol index for a revision |
 | `GET /api/watch?repo=` | SSE — `refs` events on ref change, `ping` every 15s |
 
