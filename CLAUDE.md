@@ -25,7 +25,9 @@ packages/frontend   Vite + Monaco. shell.ts (all UI state) diff.ts defprovider.t
                     ALL CSS is inline in index.html
 vendor/             prebuilt tree-sitter-kotlin.wasm (no upstream prebuild exists)
 fixtures/           make-sample-repo.sh — generates the two test repos
+docs/               README screenshots + capture-screenshots.mjs, which regenerates them
 m1-spike/           throwaway CDN spike, kept as historical evidence. Not built or tested.
+start.sh            runs both halves in one terminal; the launcher the README leads with
 ```
 
 `shell.ts` is the spine: it owns every piece of frontend state and nearly every change touches
@@ -49,7 +51,17 @@ There is **no test runner** and adding one has been deliberately deferred. What 
 pnpm typecheck                      # tsc --noEmit, strict, all 3 packages
 pnpm smoke                          # asserts the Kotlin WASM loads with a matching ABI
 bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
+node docs/capture-screenshots.mjs   # regenerates the README screenshots (app must be running)
 ```
+
+`docs/capture-screenshots.mjs` is a worked example of everything in the two paragraphs below —
+it drives the repo picker, both palettes and a real Ctrl+click peek, and asserts on
+`.zone-widget` and on the palette closing. Read it before writing a new CDP check. It also
+exists because **the screenshots went stale silently**: the Primer dark theme and the breadcrumb
+header shipped while the README still showed a light Monaco and a `<select>` sidebar, and nothing
+caught it because an image cannot fail a typecheck. Re-run it after anything that changes the
+chrome. It selects `ccd-sample-repo` itself rather than trusting `REPO_ROOT`, so whatever repo
+the backend booted with cannot leak into a committed image.
 
 Behaviour is verified **in a real browser**. Most of what matters here — peek rendering inside
 a diff, region auto-expansion on a jump, drag-resize relayout — has no meaningful assertion
@@ -143,6 +155,26 @@ after the backend dies; through the proxy it stays open 20s+ with no `error` eve
 the SSE heartbeat is a named `ping` event and not a `: ping` comment — EventSource never
 surfaces comments to script, so a comment gives the client nothing to time out against.
 `live.ts` runs a silence watchdog on it.
+
+**`start.sh` runs `set -m` so each half is its own process group, and that is the whole reason
+it exists.** Signalling the `pnpm dev:backend` wrapper alone does not reliably take its
+`tsx watch` child — or the backend that child spawned — with it, so the orphan keeps :5178 bound
+and the next start either fails to bind or, worse, looks fine while serving the old code. With
+job control on, `$!` *is* the process group id (grandchildren inherit it, measured), so
+`kill -- -$!` reaches the whole tree. Two consequences worth knowing before editing it: the
+script waits for the port rather than printing a URL, because the backend loads the Kotlin WASM
+and registers `REPO_ROOT` *before* it listens and both are fatal on failure; and Ctrl+C is
+handled by a trap that `exit`s rather than falling back into the script, so the "exited on its
+own" message stays true. Testing that trap needs a **real PTY** — bash sets SIGINT to `SIG_IGN`
+for a job started with `&` from a shell without job control, and a signal ignored on entry
+*cannot be trapped*, so backgrounding `start.sh` from a test script silently disables the very
+handler under test and it hangs forever instead. SIGTERM is not ignored and is the cheap check.
+
+**`PORT` is not fully wired, on purpose-for-now.** `packages/frontend/vite.config.ts` hardcodes
+the proxy target `127.0.0.1:5178`, so setting `PORT` moves the backend out from under the
+frontend. `start.sh` warns when the two disagree rather than silently "fixing" it, and the README
+says so. Making `PORT` real means teaching the Vite config to read the environment — a separate
+change, not a drive-by.
 
 **No raw control bytes in source.** Three files have now had to be repaired: a literal NUL in
 a template literal makes git classify the file as *binary*, so `git diff` and `grep` stop

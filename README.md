@@ -1,197 +1,452 @@
 # CtrlClickDiff
 
-A local, fast, **read-only Kotlin commit reviewer**. Pick a commit, see a side-by-side
-diff of its changed `.kt` files, and **Ctrl+click any symbol to open its declaration in an
-inline peek widget *inside* the diff** — Esc to jump back, F12 to jump to the file. Nothing
-opens in a separate editor tab. The whole review, including navigation to declarations,
-happens inside the diff.
+**A local, read-only Kotlin commit reviewer that keeps go-to-declaration *inside* the diff.**
 
-This fills a real gap: plain diff viewers have no code intelligence, and IDEs have
-go-to-declaration but bounce you *out* of the diff to use it. CtrlClickDiff keeps
-language-aware navigation **inside the diff view**.
+Pick a commit — or several — see a side-by-side diff of the `.kt` files it changed, and
+**Ctrl+click any symbol to open its declaration in a peek widget right inside the diff.**
+Nothing opens in a separate tab. You never lose your place in the review.
 
-![Cross-file peek inside a diff](packages/frontend/m3-peek-crossfile.png)
+![Ctrl+clicking shout in Main.kt peeks fun shout from Utils.kt, inline in the diff](docs/screenshot-peek.png)
 
-## How it works
+*Ctrl+clicking `shout` in `Main.kt` peeks `fun shout` from `Utils.kt` — a different file, opened
+inline, without leaving the diff. Esc closes it and puts you back.*
 
-Two processes plus a swappable "brain":
+---
 
-- **Frontend** (`packages/frontend`) — TypeScript + Vite + [Monaco](https://microsoft.github.io/monaco-editor/)
-  `DiffEditor`. A `registerDefinitionProvider('kotlin', …)` calls the backend and returns a
-  `Location`, which Monaco renders as an inline peek (`definitionLinkOpensInPeek`). Kotlin
-  highlighting is built into Monaco.
-- **Backend** (`packages/backend`) — TypeScript + Fastify. Serves git content (`git show`)
-  and a symbol index over HTTP.
-- **The brain** (`packages/backend/src/resolver`) — a `TreeSitterResolver` behind the
-  `SymbolResolver` interface (`packages/shared`). It parses every `.kt` file at the reviewed
-  revision with [tree-sitter](https://tree-sitter.github.io/) (WASM) + a Kotlin grammar,
-  builds a `name → declaration location` index, and answers "where is this declared?".
-  The interface keeps it swappable (future `CtagsResolver` / `LspResolver`).
+## Table of contents
 
-Resolution is **name-based** (good for "jump to the declaration in my own Kotlin"), not
-semantic — no overload resolution, import following, or jumps into stdlib/library code.
+- [The problem it solves](#the-problem-it-solves)
+- [What it looks like](#what-it-looks-like)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Run it](#run-it)
+- [Try it in two minutes](#try-it-in-two-minutes)
+- [How to use it](#how-to-use-it)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [What it deliberately does not do](#what-it-deliberately-does-not-do)
+- [Read-only, mechanically](#read-only-mechanically)
+- [Under the hood](#under-the-hood)
+- [Developing](#developing)
 
-## Prerequisites
+---
 
-- Node **22.x** (`.nvmrc` pins it) and **pnpm** (`corepack enable` or install pnpm 11+).
-- No native toolchain needed — the Kotlin grammar ships prebuilt at
-  `vendor/tree-sitter-kotlin.wasm` (see `vendor/README.md` to rebuild).
+## The problem it solves
 
-## Setup
+Reviewing a Kotlin commit means constantly asking *"what is this thing?"* — and today you have to
+choose which half of the answer you get:
+
+- **Plain diff viewers** (GitHub, `git diff`, most git GUIs) show the change but have no idea what
+  a symbol *means*. You read `priorityScore(order)` and can't see what it does without going
+  somewhere else.
+- **IDEs** know exactly what a symbol means — but go-to-declaration **throws you out of the diff**
+  into an ordinary editor tab. You lose the review, read the declaration, then have to find your
+  way back to where you were.
+
+CtrlClickDiff gives you both at once: a real diff, with language-aware navigation that stays
+**in** it.
+
+## What it looks like
+
+![The changed-file tree beside a diff with unchanged regions collapsed](docs/screenshot-wide.png)
+
+A wide change on a feature branch. The sidebar collapses the deep Kotlin package
+`src/main/kotlin/org/example/wide` into a **single row** instead of five nested ones, and unchanged
+regions fold away — so a 2-line edit inside a 120-line file is all that's on screen, under a
+`60 hidden lines` bar you can click to expand. The header is a breadcrumb of what you're reviewing:
+**repo › branch › commit selection**. View toggles sit on the right.
+
+![The commit palette, searchable, with the ghost-squash toggle](docs/screenshot-commit-palette.png)
+
+The commit palette. One search box matches **sha, subject and author** at once, and every commit is
+labelled `sha · subject · author · date`. Flipping **Ghost squash** turns it into a multi-select, so
+you can review several commits as one diff.
+
+## Features
+
+### In-diff code navigation — the whole point
+
+- **Ctrl+click a symbol** (**Cmd** on macOS) and its declaration opens in a **peek widget inline in
+  the diff**, whether it's declared in the same file or a different one.
+- **Esc** closes the peek and returns you exactly where you were. **F12** opens the declaration's
+  file properly, if you'd rather go there.
+- Works on both sides of the diff, and in inline mode as well as side-by-side.
+- The symbol index is built from **every `.kt` file at the revision you're reviewing**, so it finds
+  declarations as that commit left them — not as they happen to be on disk now.
+
+### Review a *selection* of commits — "ghost squash"
+
+- Select several commits and read them as **one combined diff**.
+- **Skip commits out of the middle of a range.** A docs-only commit in the middle simply disappears
+  from a review of the code around it.
+- **Nothing is rewritten and nothing is synthesised.** Both sides of every file's diff are revisions
+  that already exist in your object database — which is exactly why this stays read-only.
+- A file that a commit you *left out* also edited **is still shown, and marked ⚠**, with the
+  responsible commits named by subject. A changed file is never silently dropped from a review.
+
+### Getting around
+
+- **Repo picker** — browse your filesystem and switch repositories in-app, with a recents list for
+  one-click switching. The backend never needs restarting to review something else.
+- **Branch picker** — local and remote-tracking branches, grouped, with the checked-out one marked.
+  Copes with a detached HEAD.
+- **Commit palette** — the newest 100 commits on the selected ref, searchable.
+- **Changed-file tree** — `.kt` files only, with `A` / `M` / `D` status badges, and single-child
+  directory chains collapsed so a deep package is one row instead of six.
+
+### The diff itself
+
+- **Side-by-side or inline**, toggled live.
+- **Unchanged regions collapsed** by default (at `git diff -U3` context), with a toggle to show
+  everything.
+- Word-level change highlighting and a GitHub Primer dark theme, with contrast checked to WCAG AA
+  over the diff tints.
+- **Drag-resizable sidebar** — double-click the seam to reset. Sidebar width and both view toggles
+  persist across reloads.
+
+### Live updates
+
+- **Commits appear as you make them.** The backend watches the selected repo's refs and pushes
+  changes over SSE, so committing in another terminal reaches the picker in about a fifth of a
+  second.
+- If you're sitting on the newest commit, it follows along. If you're reviewing an older commit — or
+  a multi-commit selection you assembled by hand — it leaves your selection alone.
+
+## Requirements
+
+| | |
+|---|---|
+| **Node** | **22.x** — `.nvmrc` pins it, and `package.json` enforces `>=22 <23` |
+| **pnpm** | **11 or newer** (this is a pnpm workspace) |
+| **git** | **2.31 or newer** |
+| **A browser** | Any modern Chromium or Firefox — it's a local web app |
+| **OS** | Linux or macOS (Windows via WSL; `start.sh` is a bash script) |
+
+**No native toolchain is needed** — no JDK, no Kotlin compiler, no Android Studio, no C compiler.
+The Kotlin grammar ships prebuilt as WebAssembly at `vendor/tree-sitter-kotlin.wasm`.
+
+Why git 2.31: the ref watcher uses `git rev-parse --path-format`, and listing a merge commit's files
+needs `git log --diff-merges=first-parent`. Both landed in 2.31.
+
+## Install
+
+Step by step, assuming nothing is set up yet.
+
+### 1. Check your git
 
 ```bash
-pnpm install
-pnpm smoke        # optional: asserts the Kotlin WASM loads with a matching ABI
+git --version        # must be 2.31 or newer
 ```
 
-## Run
+### 2. Get Node 22
+
+The repo pins the version in `.nvmrc`, so with [nvm](https://github.com/nvm-sh/nvm) you don't have
+to name it:
 
 ```bash
-# Terminal 1 — backend (serves git + the symbol index on :5178)
+nvm install          # reads .nvmrc
+nvm use
+node --version       # should print v22.x
+```
+
+No nvm? Install Node 22 however you normally would — [nodejs.org](https://nodejs.org/) has
+installers, and Homebrew (`brew install node@22`), `fnm`, `asdf` and `volta` all work. Anything that
+gets you a `node --version` of `v22.x` is fine.
+
+### 3. Enable pnpm
+
+The simplest route is Corepack, which ships with Node and fetches the exact pnpm version this repo
+pins:
+
+```bash
+corepack enable
+```
+
+Alternatively, `npm install -g pnpm`. Either way, check it:
+
+```bash
+pnpm --version       # should print 11.x or newer
+```
+
+### 4. Get the code and install dependencies
+
+```bash
+git clone https://github.com/gr13nka/CtrlClickDiff.git
+cd CtrlClickDiff
+pnpm install
+```
+
+### 5. Check that it works
+
+```bash
+pnpm smoke
+```
+
+This asserts the Kotlin WebAssembly grammar loads and that its ABI matches. You should see:
+
+```
+[smoke] Kotlin language loaded OK
+[smoke] OK — tags.scm captured both 'Foo' (class) and 'bar' (function)
+```
+
+Optionally, type-check all three packages:
+
+```bash
+pnpm typecheck
+```
+
+That's the whole install. There is **no build step** — the backend runs TypeScript directly.
+
+## Run it
+
+```bash
+./start.sh                          # start empty; pick a repo in the app
+./start.sh ~/path/to/kotlin/repo    # open that repo on first load
+```
+
+Then open **<http://localhost:5173>**.
+
+`start.sh` starts both halves — the backend on `:5178` and the Vite dev server on `:5173` — waits
+until the backend is actually listening before bringing up the frontend, and **stops both together
+on Ctrl+C**. Run `./start.sh --help` for the options.
+
+If you'd rather drive the two processes yourself, use two terminals:
+
+```bash
+# Terminal 1 — backend (serves git content + the symbol index on :5178)
 REPO_ROOT=/path/to/your/kotlin/repo pnpm dev:backend
 
 # Terminal 2 — frontend (Vite dev server; proxies /api to the backend)
 pnpm dev:frontend
 ```
 
-Open the Vite URL it prints (default http://localhost:5173).
+`REPO_ROOT` is optional in both forms — it only names the repo to open on **first load**. Repos,
+branches and commits are all switchable inside the app.
 
-`REPO_ROOT` is **optional** — it names the repo to open on first load, and nothing more. Repos,
-branches and commits are all switchable in the app, so the backend never needs restarting to
-review something else.
+## Try it in two minutes
 
-Two environment variables:
+The repo ships a generator for two throwaway Kotlin repos, so you can watch every feature work
+without pointing it at anything of your own:
 
-| Var | Default | Meaning |
+```bash
+bash fixtures/make-sample-repo.sh   # creates ~/ccd-sample-repo and ~/ccd-sample-repo-2
+./start.sh ~/ccd-sample-repo
+```
+
+Open <http://localhost:5173>, then: **newest commit → click `Main.kt` → Ctrl+click `shout`.** It
+peeks `fun shout` from `Utils.kt` — cross-file, inside the diff. That's the screenshot at the top of
+this file.
+
+The fixture is shaped to exercise the UI:
+
+| Where | What it shows off |
+|---|---|
+| `main` (3 commits) | cross-file peek, and the full `A` / `M` / `D` status matrix |
+| `feature/deep-paths` | 6-level Kotlin packages — the file tree's chain collapsing |
+| `feature/wide` | 12 files over 5 directories, plus a 120-line file with a 2-line edit buried in the middle — the only thing that makes collapsed unchanged regions visible |
+| `~/ccd-sample-repo-2` | a second repo, for the repo picker |
+
+`main`'s three commits have pinned dates, so their SHAs come out identical on every machine.
+
+## How to use it
+
+The review loop follows the breadcrumb in the header, left to right:
+
+**repo › branch › commit(s)** → click a changed file → **Ctrl+click** symbols to read it.
+
+1. **Pick a repository.** Click the first breadcrumb chip. You get a directory browser (sandboxed to
+   `CCD_BROWSE_ROOT`, default `$HOME`) plus a recents list.
+2. **Pick a branch.** Click the second chip. Local branches are grouped before remote-tracking ones,
+   and the checked-out branch is marked.
+3. **Pick a commit.** Click the third chip for the searchable commit palette. To review several
+   commits as one diff, flip **Ghost squash** and tick the ones you want.
+4. **Click a changed `.kt` file** in the sidebar to open its diff.
+5. **Ctrl+click any symbol** to peek its declaration inline.
+
+### Gestures
+
+| Do this | To get this |
+|---|---|
+| **Ctrl+click** a symbol (**Cmd** on macOS) | peek its declaration inline, in the diff |
+| **Esc** | close the peek, back to where you were |
+| **F12** | open the declaration's file |
+| **↑ / ↓** in a palette | move between rows |
+| **Enter** in a palette | choose the highlighted row |
+| **Esc** in a palette | close it, change nothing |
+| **Type** in a palette | filter — commits match on sha, subject *and* author |
+| **Click** a directory row | collapse or expand that subtree |
+| **Drag** the sidebar edge | resize it (220–640px) |
+| **Double-click** the sidebar edge | reset it to the default width |
+| **Split / Inline** | two-pane or one-column diff |
+| **Collapse unchanged** | fold unchanged regions away, or show everything |
+
+### Reading a ghost squash
+
+When a selection holds more than one commit, each file's diff runs from *before the earliest
+selected commit that touched it* to *after the latest one that did*. That's decided per **file**,
+not per selection, which is what lets you skip commits from the middle without dragging their edits
+into files they never touched.
+
+The one case that can't be exact: a file edited by **both** a selected and a skipped commit has no
+two-revision representation, so the skipped commit's edits are unavoidably inside that file's diff.
+Those files get a **⚠** in the sidebar whose tooltip names the commits responsible, by subject.
+
+## Configuration
+
+All optional, all environment variables:
+
+| Variable | Default | Meaning |
 |---|---|---|
-| `REPO_ROOT` | *(none)* | Repo to select on first load. If unset, pick one with the repo picker. |
+| `REPO_ROOT` | *(none)* | Repo to select on first load. Unset, you pick one in the app. |
 | `CCD_BROWSE_ROOT` | `$HOME` | The only directory tree the repo picker may browse or register from. |
 | `PORT` | `5178` | Backend port. |
 
-`CCD_BROWSE_ROOT` is a sandbox, not a convenience: it bounds what the *browser* can reach on
-your filesystem. `REPO_ROOT` deliberately ignores it — that one is typed by whoever starts the
-process, who already has a shell.
+`CCD_BROWSE_ROOT` is a **sandbox, not a convenience**: it bounds what the browser can reach on your
+filesystem. `REPO_ROOT` deliberately ignores it — that one is typed by whoever starts the process,
+who already has a shell.
 
-**Using it:** pick a repository from the bar at the top of the sidebar (a directory browser,
-with recents for one-click switching) → pick a **branch** → pick a **commit** (labelled
-`sha · date · subject`) → click a changed `.kt` file in the sidebar tree → **Ctrl+click**
-(Cmd on macOS) a symbol to peek its declaration inline, **Esc** to close the peek, **F12** to
-jump to the declaration's file.
+> **Note on `PORT`:** the Vite dev proxy targets `127.0.0.1:5178` literally
+> (`packages/frontend/vite.config.ts`). If you change `PORT`, change that target too, or `/api`
+> calls won't reach the backend. `start.sh` warns you when the two disagree.
 
-The sidebar is drag-resizable (double-click the seam to reset) and groups changed files into a
-tree, collapsing single-child directory chains so a deep Kotlin package renders as one row. The
-toolbar toggles **side-by-side / inline** diff and **collapse unchanged** regions; both persist.
+## Troubleshooting
 
-**Commits appear as you make them.** The backend watches the selected repo's refs and pushes
-changes over SSE, so committing in another terminal updates the picker in about a fifth of a
-second. If you are sitting on the newest commit it follows along; if you are reviewing an older
-one it leaves your selection alone.
+**`start.sh` says something is already listening on :5178.**
+An earlier backend is still running. `tsx watch` does not always die with the `pnpm` process that
+started it, so a previous session can leave one holding the port. Find it with `lsof -i :5178` and
+kill it. (`start.sh` avoids creating these itself — it signals whole process groups on exit.)
 
-Anything still planned is tracked in `TO-DOS.md`.
+**I killed the backend by PID and now it won't come back.**
+`tsx watch` doesn't respawn a child you killed underneath it. Either restart `start.sh`, or
+`touch packages/backend/src/server.ts` to make the watcher rebuild it.
 
-### Development note
+**The page loads but there are no repositories.**
+That's the expected empty state when `REPO_ROOT` isn't set — click the first breadcrumb chip and
+pick one. If the picker itself shows nothing, check `CCD_BROWSE_ROOT`: it defaults to `$HOME` and
+only ever lists **directories**.
 
-`tsx watch` does not respawn its child if you kill it directly. If you kill the backend by PID
-(`lsof -i :5178`), `touch packages/backend/src/server.ts` to bring it back. Killing the
-`pnpm dev:backend` wrapper by its top-level PID does not always take the `tsx watch` process
-with it, which can leave the old backend bound to 5178.
+**Ctrl+click does nothing.**
+Resolution is name-based over your own Kotlin at that revision. It won't jump into the standard
+library or third-party dependencies, won't follow imports, and won't pick between overloads. If the
+symbol *is* declared in a `.kt` file in the same repo and nothing happens, check you're holding Ctrl
+(Cmd on macOS) — a plain click just moves the cursor.
 
-### Try it with the bundled fixture
+**New commits aren't appearing.**
+Live updates need the SSE stream to be alive; if the backend restarted while the page stayed open,
+reload the page. Also note the picker follows the tip only when your selection is a single commit
+that *was* the tip — a hand-built multi-commit selection is deliberately left alone.
 
-```bash
-bash fixtures/make-sample-repo.sh          # creates ~/ccd-sample-repo and ~/ccd-sample-repo-2
-REPO_ROOT=~/ccd-sample-repo pnpm dev:backend
-pnpm dev:frontend
-```
+**`pnpm smoke` fails.**
+The Kotlin WASM grammar didn't load. Confirm `vendor/tree-sitter-kotlin.wasm` exists and that
+`node --version` is `v22.x`; see `vendor/README.md` to rebuild the grammar.
 
-Open the newest commit, click `Main.kt`, and Ctrl+click `shout` — it peeks `fun shout` from
-`Utils.kt`, cross-file, inside the diff.
+## What it deliberately does not do
 
-The fixture exists to exercise the UI, so it is shaped for it:
+Stated up front so it isn't a disappointment later:
 
-| Where | What it demonstrates |
-|---|---|
-| `main` (3 commits) | cross-file peek, the full `A`/`M`/`D` status matrix |
-| `feature/deep-paths` | 6-level Kotlin package paths — the tree's chain collapsing |
-| `feature/wide` | 12 files over 5 directories, plus a 120-line file with a 2-line edit in the middle — the only thing that makes collapsed unchanged regions visible |
-| `~/ccd-sample-repo-2` | a second repo, different package and class names, for the repo picker |
+- **Only Kotlin.** No other language, and no plans for one.
+- **Not semantically accurate.** Resolution is by **name**: no overload resolution, no import
+  following, no jumps into the stdlib or libraries. It's built for "jump to the declaration in my own
+  Kotlin", and it tells you when a name is ambiguous.
+- **No editing, staging, or committing.** It's a reviewer, not a git client — see below.
+- **No auth and no remote access.** It binds to `127.0.0.1` and assumes one trusted local user.
+- **No light mode** — dark only.
+- **No find-references, rename, or hover** beyond what Monaco does by itself.
+- **No desktop packaging.** It's two dev processes and a browser tab.
 
-`main`'s three commits have pinned dates, so their SHAs are reproducible across machines; the
-branches are appended after them and never disturb that.
+## Read-only, mechanically
 
-## Layout
+This is a **guarantee, not an aspiration**. The code has no path to write or delete anything:
 
-```
-packages/shared     @ctrlclickdiff/shared  — the SymbolResolver contract + wire types (consumed as TS source)
-packages/backend    Fastify + git.ts + resolver/TreeSitterResolver.ts
-packages/frontend    Vite + monaco; diff.ts, defprovider.ts, shell.ts
-vendor/             prebuilt tree-sitter-kotlin.wasm (+ how to rebuild)
-fixtures/           make-sample-repo.sh — a reproducible Kotlin test repo
-m1-spike/           throwaway CDN spike that proved peek-in-diff before any real code
-```
+- **Every git call** goes through one function (`packages/backend/src/git.ts`'s `run()`) using
+  `execFile` with an **argument array, never a shell string**, so request input can't inject shell
+  commands. The only subcommands invoked anywhere are `log`, `rev-parse`, `ls-tree`, `for-each-ref`
+  and `show` — all read-only. Nothing calls `checkout`, `reset`, `clean`, `commit`, `push`, or
+  anything that moves a ref.
+- **The backend never writes the filesystem.** Its entire fs surface is `readFile` (the WASM grammar,
+  once at boot), `realpath`/`stat` to validate a repo path, `readdir` for the picker, `existsSync`,
+  and `fs.watch` for the change stream. There is no `writeFile`, `unlink`, `rm`, `rename` or `mkdir`
+  anywhere in the backend.
+- **Directory listing is sandboxed.** `GET /api/browse` is confined to `CCD_BROWSE_ROOT` and returns
+  **directory names only** — never file names, contents, sizes or timestamps. Dotfiles are skipped
+  and symlinked directories are excluded outright, so a listing can't dangle a path out of the
+  sandbox. The requested path and the root are both `realpath`'d before being compared.
+- **Registering a repo applies the same check**, after canonicalising the path to its repository
+  toplevel — so an allowed-looking subdirectory of a repo that lives *outside* the browse root is
+  rejected too. `REPO_ROOT` bypasses this by design: it comes from whoever started the process.
+- **The editor is read-only too** — Monaco's diff editor is constructed with `readOnly: true`, so the
+  UI can't even be typed into.
 
-## HTTP API
+## Under the hood
 
-Every data route takes an optional **`?repo=<id>`**. Omitted, it falls back to the boot
-`REPO_ROOT`; unknown, it answers **409 `repo_not_registered`**, which the frontend treats as
-"the backend restarted" — it re-POSTs the repo path and retries once. That works because ids are
-deterministic (`slug(basename)-sha256(realpath)[0..8]`), so `POST /api/repos` is idempotent and
-an id survives a restart.
+Two processes and a swappable "brain":
+
+- **Frontend** (`packages/frontend`) — TypeScript + Vite +
+  [Monaco](https://microsoft.github.io/monaco-editor/)'s `DiffEditor`. A
+  `registerDefinitionProvider('kotlin', …)` calls the backend and returns a `Location`, which Monaco
+  renders as an inline peek. Kotlin syntax highlighting is built into Monaco.
+- **Backend** (`packages/backend`) — TypeScript + Fastify, serving git content (`git show`) and a
+  symbol index over HTTP.
+- **The brain** (`packages/backend/src/resolver`) — a `TreeSitterResolver` behind the
+  `SymbolResolver` interface in `packages/shared`. It parses every `.kt` file at the reviewed
+  revision with [tree-sitter](https://tree-sitter.github.io/) (WASM) plus a Kotlin grammar, builds a
+  `name → declaration location` index, and answers "where is this declared?". The interface keeps it
+  swappable for a future ctags- or LSP-backed resolver.
+
+Repo scoping is **stateless**: there is no "current repo" on the server. Every data route takes
+`?repo=<id>` against an append-only registry of validated paths. Ids are deterministic
+(`slug(basename)-sha256(realpath)[0..8]`), so registering is idempotent and an id survives a restart
+— which is how the frontend recovers from a `409 repo_not_registered`, by re-registering and retrying
+once.
+
+### HTTP API
+
+Every data route takes an optional **`?repo=<id>`**; omitted, it falls back to the boot `REPO_ROOT`.
 
 | Endpoint | Returns |
 |---|---|
+| `GET /health` | `{ok:true}` |
 | `GET /api/repos` | `{ repos: RepoEntry[], defaultRepoId, browseRoot }` |
 | `POST /api/repos` `{path}` | `RepoEntry` — validates and registers a repo; idempotent |
-| `GET /api/browse?path=` | subdirectories of `path` (default: the browse root) — directory names only |
+| `GET /api/browse?path=` | subdirectories of `path` (default: the browse root), names only |
 | `GET /api/branches?repo=` | `BranchInfo[]` — local + remote-tracking branches, full refnames |
-| `GET /api/commits?repo=&ref=` | `CommitInfo[]` (newest 100 on `ref`, default `HEAD`) |
-| `GET /api/commit/:sha/files?repo=` | `{ headSha, baseSha, files: ChangedFile[] }` (`.kt` only, `A`/`M`/`D`) |
-| `GET /api/file?repo=&rev=&path=` | file content at a revision (`""` for the missing side of added/deleted files) |
-| `GET /api/def?repo=&name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found; multiple = ambiguous) |
+| `GET /api/commits?repo=&ref=` | `CommitInfo[]` — newest 100 on `ref` (default `HEAD`) |
+| `GET /api/preview?repo=&shas=` | what a commit selection means, per file |
+| `GET /api/file?repo=&rev=&path=` | file content at a revision (`""` for the missing side of an add or delete) |
+| `GET /api/def?repo=&name=&file=&line=&lang=kotlin&rev=` | `DefLocation[]` (empty = not found, several = ambiguous) |
 | `POST /api/index?repo=&rev=` | prewarm the symbol index for a revision |
-| `GET /api/watch?repo=` | SSE — `refs` events (`{headSha}`) on ref change, `ping` every 15s |
+| `GET /api/watch?repo=` | SSE — `refs` events on ref change, `ping` every 15s |
 
-## Scope
+`shas` is a comma-separated list, whitelisted against `^[0-9a-f]{40}(,[0-9a-f]{40})*$` at the route
+before it can reach git's argv, and capped at 100 entries — the same ceiling as the commit log page
+size, because a selection is only ever assembled from commits the picker listed.
 
-**In:** Kotlin; side-by-side *and* inline diff; same-file + cross-file peek; name-based
-resolution; in-app repo, branch and commit selection; live ref updates; read-only.
+## Developing
 
-**Out:** other languages, semantic accuracy (no overload resolution, import following, or jumps
-into stdlib), staging/editing, auth/remote access, desktop packaging, find-references, rename,
-hover. The `SymbolResolver` seam keeps the resolver swappable; see `TO-DOS.md` for anything
+```
+packages/shared     the SymbolResolver contract + wire types (consumed as TS source)
+packages/backend    Fastify; git.ts, preview.ts, repos.ts, browse.ts, watch.ts,
+                    resolver/TreeSitterResolver.ts
+packages/frontend   Vite + Monaco; shell.ts, diff.ts, defprovider.ts, and one module per
+                    piece of UI. All CSS is inline in index.html
+vendor/             prebuilt tree-sitter-kotlin.wasm (+ how to rebuild it)
+fixtures/           make-sample-repo.sh — the reproducible Kotlin test repos
+docs/               the screenshots used in this file
+m1-spike/           a throwaway CDN spike that proved peek-in-diff before any real code
+```
+
+```bash
+pnpm typecheck                      # tsc --noEmit, strict, all three packages
+pnpm smoke                          # asserts the Kotlin WASM loads with a matching ABI
+bash fixtures/make-sample-repo.sh   # regenerate the fixture repos
+```
+
+There is **no test runner** — behaviour is verified in a real browser, because most of what matters
+here (peek rendering inside a diff, region auto-expansion on a jump, drag-resize relayout) has no
+meaningful assertion outside one.
+
+**If you're going to change this code, read [`CLAUDE.md`](CLAUDE.md) first.** It records the
+constraints that look arbitrary and are not, the bugs that have already been fixed once, and the
+reasoning behind decisions a reasonable person would otherwise undo. `TO-DOS.md` tracks anything
 still open.
-
-Requires **git ≥ 2.31** (`rev-parse --path-format`, used by the ref watcher).
-
-### Read-only, mechanically
-
-"Read-only" isn't just a design intent — the code has no path to write or delete anything:
-
-- Every git call goes through one function (`packages/backend/src/git.ts`'s `run()`) using
-  `execFile('git', args, …)` with an **argument array**, never a shell string, so request input
-  can't inject shell commands. The only git subcommands ever invoked are `log`, `rev-parse`,
-  `diff-tree`, `ls-tree`, `for-each-ref`, and `show` — all read-only plumbing. Nothing calls
-  `checkout`, `reset`, `clean`, `commit`, `push`, or any branch-mutating command. Listing
-  branches (`for-each-ref`) only *reads* refs; there is no code path that creates, moves, or
-  deletes one.
-- The backend reads the filesystem and never writes it. Its whole filesystem surface is
-  `readFile` (the Kotlin WASM grammar + `tags.scm`, once at boot), `realpath`/`stat` to validate
-  a path being registered as a repo, `readdir` to list directories for the repo picker,
-  `existsSync`, and `fs.watch` on a repo's `.git` common dir + `.git/refs` for the `/api/watch`
-  change stream (which observes writes; it never makes them, and reads no file contents — the
-  event only says "look again", and the answer comes from `git` as usual). There is no
-  `writeFile`, `unlink`, `rm`, `rename`, or `mkdir` anywhere in `packages/backend` or
-  `packages/shared`.
-- That directory listing (`GET /api/browse`, `packages/backend/src/browse.ts`) is confined to a
-  **browse root** — `CCD_BROWSE_ROOT`, defaulting to `$HOME` — and returns **directory names
-  only**. Never file names, never file contents, sizes, or timestamps; entries starting with `.`
-  are skipped, and symlinked directories are excluded outright so a listing can't dangle a path
-  out of the sandbox. The requested path and the root are both `realpath`'d *before* they are
-  compared, which is what stops a symlink from escaping the root.
-- `POST /api/repos` is the only way a browser can choose which directory git runs in, and it
-  applies the same containment check — after canonicalizing the path to its repository toplevel
-  via `git rev-parse --show-toplevel`, so an allowed-looking subdirectory of a repo that lives
-  outside the browse root is rejected too. `REPO_ROOT` bypasses this check by design: it is
-  supplied by whoever starts the process, not by the browser.
-- Monaco's diff editor is created with `readOnly: true` (`packages/frontend/src/diff.ts`), so
-  the UI itself can't be typed into either.
