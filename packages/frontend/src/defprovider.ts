@@ -230,7 +230,11 @@ export function registerDefinitions(inReview: InReview): void {
   // and a sidebar click the same gesture.
   monaco.editor.registerEditorOpener({
     async openCodeEditor(_source, resource, selectionOrPosition) {
-      const { path } = parseModelUri(resource);
+      // The rev travels with the path. For a file the selection changed it is
+      // redundant — the band already has a card — but for one it did not, it is
+      // the only thing that says which revision to show, and the resource URI is
+      // the only place it exists at this point.
+      const { path, rev } = parseModelUri(resource);
       const ccd = window.__ccd;
       if (!ccd) return false;
 
@@ -247,7 +251,7 @@ export function registerDefinitions(inReview: InReview): void {
       // Best-effort on the scroll: the jump itself is what this returns true
       // for, and a failure to centre a line is not a failure to get there.
       try {
-        await ccd.openPath(path, line);
+        await ccd.openPath(path, line, rev);
       } catch (err) {
         console.error('[ccd] editor opener: reveal failed', err);
       }

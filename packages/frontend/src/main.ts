@@ -28,8 +28,12 @@ import {
 // file clicks and F12's cross-file jumps share the exact same code path
 // (scrolling, mounting, cursor placement, everything).
 interface CcdDebugHook {
-  /** `line` is 1-based and optional: without one the file is scrolled to, not into. */
-  openPath(path: string, line?: number): Promise<void>;
+  /**
+   * `line` is 1-based and optional: without one the file is scrolled to, not into.
+   * `rev` lets a path the selection never changed be opened as a reference card;
+   * only the peek's editor-opener has one, and only it needs to.
+   */
+  openPath(path: string, line?: number, rev?: string): Promise<void>;
   /** '' until the shell has resolved a repository. Also the model URIs' authority. */
   readonly repoId: string;
   readonly headSha: string;

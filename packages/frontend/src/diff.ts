@@ -258,6 +258,71 @@ export async function createFileDiff(
 }
 
 /**
+ * One file at one revision, as a plain read-only editor sized to its content —
+ * the *context* card the band shows for a definition in a file the selection
+ * never touched.
+ *
+ * Deliberately NOT a diff editor with the same model on both sides. That was the
+ * old single-editor view's mistake and it is recorded in revealPath's comment:
+ * for an untouched file the two ends of the span hold identical content, so the
+ * reader arrives at a diff of a file against itself with every line folded away
+ * behind an unchanged-region bar. A file that is not being diffed should not be
+ * dressed as a diff.
+ *
+ * It satisfies `FileDiff` so a card does not care which kind it holds — the only
+ * asymmetry is `whenDiffComputed`, which resolves immediately here because there
+ * is no diff to wait for.
+ *
+ * PEEK_OPTIONS is applied after construction like createFileDiff does, and for
+ * the same reason spelled out there: without it this editor would look completely
+ * normal and simply never peek, so Ctrl+click would work everywhere except the
+ * card you reached BY Ctrl+click. It is not registered in `liveEditors` — that
+ * set exists for the side-by-side/inline toggle, which is a diff-only idea.
+ */
+export async function createFileView(
+  host: HTMLElement,
+  spec: { repoId: string; path: string; rev: string }
+): Promise<FileDiff> {
+  const { repoId, path, rev } = spec;
+  const uri = modelUri(repoId, rev, path);
+  const model =
+    findModel(uri) ??
+    getOrCreateModel(uri, await api.file(repoId, rev, path), languageForPath(path)?.id ?? 'plaintext');
+
+  const editor = monaco.editor.create(host, {
+    ...BAND_OPTIONS,
+    // A diff editor takes renderSideBySide et al; a plain one must not be handed
+    // options it does not understand, so only the shared subset is spread and
+    // the model is set explicitly rather than through the bag (see loadModels on
+    // why models must outlive their editor).
+    model: null
+  });
+  editor.updateOptions(PEEK_OPTIONS);
+  editor.setModel(model);
+
+  let applied = -1;
+  const syncHeight = (): void => {
+    const px = editor.getContentHeight();
+    if (px === applied) return;
+    applied = px;
+    host.style.height = `${px}px`;
+    editor.layout();
+  };
+  const sub = editor.onDidContentSizeChange(syncHeight);
+  syncHeight();
+
+  return {
+    modified: editor,
+    whenDiffComputed: () => Promise.resolve(),
+    height: () => applied,
+    dispose: () => {
+      sub.dispose();
+      editor.dispose();
+    }
+  };
+}
+
+/**
  * Both sides of one file as models, fetching only what is not already built.
  *
  * Models are deliberately never disposed — not here, and not by FileDiff.dispose.

@@ -426,6 +426,20 @@
       .ccd-badge-M { background: var(--ccd-attention); }
       .ccd-badge-D { background: var(--ccd-danger); }
 
+      /* A reference card is not part of the change, so its badge is deliberately
+         the quietest of the four — outlined rather than filled, in the muted
+         foreground. It has to be legible without competing with A/M/D, which are
+         the review itself. Wider than 16px because "ref" is three glyphs where
+         the others are one. */
+      .ccd-badge-context {
+        width: auto;
+        padding: 0 5px;
+        background: transparent;
+        border: 1px solid var(--ccd-border);
+        color: var(--ccd-fg-muted);
+        font-weight: 500;
+      }
+
       /* min-width:0 is what makes the ellipsis actually render: as a flex item
          this defaults to min-width:auto, which refuses to shrink below its
          content width, so text-overflow never fires and the row's
@@ -515,6 +529,15 @@
         /* Stops a flex item from being squeezed below its content height — the
            heights here are computed, and flex must not renegotiate them. */
         flex: 0 0 auto;
+      }
+
+      /* A reference card sits in the same column as the review but is not part of
+         it, and the border is where that reads fastest — a dashed edge says
+         "provisional" before any label is read. Kept to the border alone: dimming
+         the whole card would make the code harder to read, which is the one thing
+         the reader opened it for. */
+      .ccd-card-context {
+        border-style: dashed;
       }
 
       /* Sticky, so the path stays readable while its own diff scrolls past. The

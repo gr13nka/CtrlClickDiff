@@ -491,26 +491,40 @@ function selectionTitle(): string {
  * there is nothing to open. A sidebar click and a cross-file peek jump both land
  * here, which is what keeps them identical.
  *
- * A path the selection did not change has no card, and that case is *explained*
- * rather than silently ignored — see the status message below.
+ * A path the selection did not change has no diff, so it is opened as a
+ * read-only reference card instead — which is what `rev` is for. Callers that
+ * can only name reviewed paths (the sidebar) omit it.
  */
-export async function revealPath(path: string, line?: number): Promise<void> {
+export async function revealPath(path: string, line?: number, rev?: string): Promise<void> {
   if (selection.length === 0) {
     throw new Error('shell.revealPath: no commit selected yet');
   }
 
-  // The band holds exactly the changed files, so a definition in an untouched
-  // file has nowhere to be scrolled to. The peek widget has already rendered
-  // that definition inline — it builds its own inner editor from the model
-  // defprovider.ts created — so the reader is not stuck; they just cannot
-  // *navigate* there, and saying so is the whole point of this branch. The old
-  // single-editor view did navigate, and it is worth knowing what it showed:
-  // it fell back to the selection's span, whose two ends hold identical
-  // content for a file the selection never touched, so the destination was a
-  // diff of a file against itself — every line collapsed behind an unchanged
-  // region bar. A message beats arriving somewhere blank.
+  // A definition in a file the selection never changed has no diff to scroll to,
+  // so the band opens it as a read-only *reference* card instead. `rev` is what
+  // makes that possible and why it is threaded through from the peek: an
+  // untouched file has no base/head pair, only the revision the definition was
+  // resolved against.
+  //
+  // This used to be a refusal with a status message, on the grounds that the
+  // peek had already rendered the definition inline. It is worth knowing what
+  // the refusal was protecting against, because the fix must not reintroduce it:
+  // the ORIGINAL single-editor view did navigate, by falling back to the
+  // selection's span — whose two ends hold identical content for an untouched
+  // file — so the reader arrived at a diff of a file against itself, every line
+  // folded behind an unchanged-region bar. A reference card is not that: it is a
+  // plain editor over one revision (see createFileView), which is why it can
+  // show the file at all.
+  //
+  // Without a rev there is still nothing to open, so the message survives for
+  // that case — a sidebar click, which names a reviewed path and never this one.
   if (!isInReview(path)) {
-    setStatus(`${path} is not changed by this selection — showing its definition inline only.`);
+    if (!rev) {
+      setStatus(`${path} is not changed by this selection — showing its definition inline only.`);
+      return;
+    }
+    setStatus(`${path} is not changed by this selection — opened for reference.`);
+    await band?.openContext(path, rev, line);
     return;
   }
 

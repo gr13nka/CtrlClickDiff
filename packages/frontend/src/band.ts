@@ -30,7 +30,7 @@
 
 import type { PreviewFile } from '@ctrlclickdiff/shared';
 import type * as monaco from 'monaco-editor';
-import { createFileDiff, type FileDiff } from './diff';
+import { createFileDiff, createFileView, type FileDiff } from './diff';
 
 /**
  * How far outside the viewport a card starts loading, in px. Generous on
@@ -58,8 +58,21 @@ const UNMEASURED_HEIGHT_PX = 260;
  */
 const ACTIVE_ZONE = '0px 0px -85% 0px';
 
+/**
+ * A card the reader arrived at by Ctrl+click, holding a file the selection never
+ * changed. It carries the revision to show, because that is the one thing a
+ * PreviewFile supplies for a reviewed file and nothing supplies for this one:
+ * there is no base/head pair to diff, only the revision the definition was
+ * resolved against.
+ */
+interface ContextOf {
+  readonly rev: string;
+}
+
 interface Card {
   file: PreviewFile;
+  /** Set only on a context card — see ContextOf. Null means "this is a diff". */
+  context: ContextOf | null;
   el: HTMLElement;
   body: HTMLElement;
   twisty: HTMLButtonElement;
@@ -82,6 +95,12 @@ export interface Band {
   render(repoId: string, files: PreviewFile[]): void;
   /** Scrolls `path` into view, mounting it if need be, and optionally centres `line`. */
   revealPath(path: string, line?: number): Promise<void>;
+  /**
+   * Opens `path` at `rev` as a read-only reference card at the foot of the
+   * column and reveals it. For a definition in a file the selection did not
+   * change, which therefore has no diff to show.
+   */
+  openContext(path: string, rev: string, line?: number): Promise<void>;
   /** Empties the column — for a repo switch, where the old files mean nothing. */
   clear(): void;
   /** The modified pane of the file being read, for main.ts's debug hook. */
@@ -143,13 +162,17 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     card.body.style.height = `${card.measured}px`;
     card.el.classList.add('loading');
 
-    const pending = createFileDiff(card.body, {
-      repoId,
-      path: card.file.path,
-      status: card.file.status,
-      baseSha: card.file.baseSha,
-      headSha: card.file.headSha
-    }).then(
+    const pending = (
+      card.context
+        ? createFileView(card.body, { repoId, path: card.file.path, rev: card.context.rev })
+        : createFileDiff(card.body, {
+            repoId,
+            path: card.file.path,
+            status: card.file.status,
+            baseSha: card.file.baseSha,
+            headSha: card.file.headSha
+          })
+    ).then(
       (diff) => {
         card.pending = null;
         if (e !== bandEpoch || token !== card.token) {
@@ -218,9 +241,9 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     void mount(card);
   }
 
-  function buildCard(file: PreviewFile): Card {
+  function buildCard(file: PreviewFile, context: ContextOf | null = null): Card {
     const el = document.createElement('section');
-    el.className = 'ccd-card';
+    el.className = context ? 'ccd-card ccd-card-context' : 'ccd-card';
     el.dataset.path = file.path;
 
     const header = document.createElement('div');
@@ -233,9 +256,19 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     twisty.ariaExpanded = 'true';
     twisty.title = 'Collapse this file';
 
+    // A context card carries no A/M/D — it is not part of the change — so its
+    // badge says what it IS instead. Saying it on the card rather than only in
+    // the status line matters: this is the one place the reader is looking after
+    // a jump, and an unlabelled file here would read as part of the review.
     const badge = document.createElement('span');
-    badge.className = `ccd-badge ccd-badge-${file.status}`;
-    badge.textContent = file.status;
+    if (context) {
+      badge.className = 'ccd-badge ccd-badge-context';
+      badge.textContent = 'ref';
+      badge.title = 'Not changed by this selection — opened for reference';
+    } else {
+      badge.className = `ccd-badge ccd-badge-${file.status}`;
+      badge.textContent = file.status;
+    }
 
     // Directory dim, basename bright. The full path has to be here — a band has
     // no sidebar selection to say which file you are looking at — but read as
@@ -276,6 +309,7 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
 
     const card: Card = {
       file,
+      context,
       el,
       body,
       twisty,
@@ -308,6 +342,57 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
 
   const nextFrame = (): Promise<void> =>
     new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+  /**
+   * Appends a read-only card for a file the selection never changed, then
+   * reveals it — the landing place for a Ctrl+click whose definition lives
+   * outside the review.
+   *
+   * Appended rather than inserted in path order, because these cards are not
+   * part of the change: the reviewed files are a set with a meaning and an order,
+   * and interleaving reference material into it would make the column stop being
+   * a description of the commit. They accumulate at the foot in the order the
+   * reader asked for them, which is also the order they will want to go back
+   * through.
+   *
+   * Re-asking for a path that is already open just reveals it, whether it was
+   * opened as context or is a reviewed file — the caller does not have to know
+   * which, and neither does the reader.
+   */
+  async function openContext(path: string, rev: string, line?: number): Promise<void> {
+    if (!byPath.has(path)) {
+      // A PreviewFile shape with no status of its own: `status` is only read by
+      // createFileDiff, which a context card never reaches, and skippedShas is
+      // the ⚠ affordance, which would be a lie about a file no commit here
+      // touched.
+      const card = buildCard(
+        { path, status: 'M', baseSha: rev, headSha: rev, skippedShas: [] },
+        { rev },
+      );
+      cards.push(card);
+      byPath.set(path, card);
+      host.append(card.el);
+
+      // Claim the reveal exemption BEFORE observing. `observe()` always
+      // delivers an initial entry, and a card appended at the foot of a long
+      // column is not intersecting when it arrives — so without this the
+      // observer's first tick unmounts the very card this call exists to open,
+      // and the reveal then races that teardown.
+      revealTarget = path;
+      mountObserver?.observe(card.el);
+      activeObserver?.observe(card.el);
+    }
+
+    // One frame before mounting, and it is not cosmetic. This is reached from
+    // the peek's editor-opener, and Monaco tears the peek widget down as soon as
+    // that returns. The model is normally already built — the peek made it — so
+    // createFileView has nothing to await and would construct its editor in the
+    // very tick the widget is being disposed, at which point Monaco's lazily
+    // built suggest widget lands on an already-disposed instantiation service
+    // and throws where nothing can catch it. Yielding once puts the two apart.
+    await nextFrame();
+    await revealPath(path, line);
+  }
 
   async function revealPath(path: string, line?: number): Promise<void> {
     const card = byPath.get(path);
@@ -389,7 +474,9 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     repoId = nextRepoId;
     active = '';
 
-    cards = files.map(buildCard);
+    // Not `files.map(buildCard)`: map would pass the array index as the second
+    // argument, making every card after the first a context card.
+    cards = files.map((file) => buildCard(file));
     for (const card of cards) byPath.set(card.file.path, card);
     host.append(...cards.map((c) => c.el));
     host.scrollTop = 0;
@@ -435,6 +522,7 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
   return {
     render,
     revealPath,
+    openContext,
     clear,
     activeEditor: () => byPath.get(active)?.diff?.modified ?? null,
     activePath: () => active
