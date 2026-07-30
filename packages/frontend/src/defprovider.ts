@@ -25,7 +25,7 @@
 import * as monaco from 'monaco-editor';
 import type { DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
-import { getOrCreateModel, modelUri, parseModelUri, revealLine } from './diff';
+import { getOrCreateModel, modelUri, parseModelUri } from './diff';
 
 // Memoizes GET /api/file per "<repoId>/<rev>/<path>" so the two
 // provideDefinition calls per click (see file header, fact 1) never
@@ -94,31 +94,29 @@ export function registerKotlinDefinitions(): void {
   // F12 / "go to definition" on a cross-file Location routes through here
   // instead of monaco's default no-op for resources other than the current
   // model. Routes through the app's debug/open hook (window.__ccd, see
-  // main.ts) rather than talking to diff.ts directly — that hook is the
-  // one "switch the view to this file" entry point, and M4's real file
-  // switcher will replace its implementation without this file changing.
+  // main.ts) rather than talking to the band directly — that hook is the one
+  // "take the reader to this file" entry point, which is what makes an F12 jump
+  // and a sidebar click the same gesture.
   monaco.editor.registerEditorOpener({
     async openCodeEditor(_source, resource, selectionOrPosition) {
       const { path } = parseModelUri(resource);
       const ccd = window.__ccd;
       if (!ccd) return false;
 
-      await ccd.openPath(path);
+      // Path and line together in one call, not a jump followed by a separate
+      // reveal. Only the receiving end knows when the target's diff has been
+      // computed and its collapsed regions expanded, and a reveal issued from
+      // out here would be measuring a layout that is still about to move.
+      const line = selectionOrPosition
+        ? 'lineNumber' in selectionOrPosition
+          ? selectionOrPosition.lineNumber
+          : selectionOrPosition.startLineNumber
+        : undefined;
 
-      // Best-effort: land the cursor/viewport on the target line now that
-      // the modified editor's model has switched. revealLine owns the timing
-      // and ordering this needs (see diff.ts) — openPath only guarantees the
-      // models are swapped, not that the diff behind them has been computed,
-      // and scrolling before that lands on a layout that then moves. Wrapped
-      // in try/catch — the jump itself (the file switch) already succeeded
-      // either way.
+      // Best-effort on the scroll: the jump itself is what this returns true
+      // for, and a failure to centre a line is not a failure to get there.
       try {
-        const line = selectionOrPosition
-          ? 'lineNumber' in selectionOrPosition
-            ? selectionOrPosition.lineNumber
-            : selectionOrPosition.startLineNumber
-          : undefined;
-        if (line !== undefined) await revealLine(line);
+        await ccd.openPath(path, line);
       } catch (err) {
         console.error('[ccd] editor opener: reveal failed', err);
       }

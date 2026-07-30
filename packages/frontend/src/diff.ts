@@ -1,16 +1,22 @@
-// Owns the single monaco DiffEditor instance for the app. Mirrors the M1 spike's
-// proven pattern (definitionLinkOpensInPeek + gotoLocation applied directly to
-// both inner editors, not trusted to propagate from createDiffEditor's options)
-// and the M2 plan's model-building approach: models are keyed by
+// Makes monaco DiffEditors, one per file in the band (band.ts owns where they
+// go and when they exist). Mirrors the M1 spike's proven pattern
+// (definitionLinkOpensInPeek + gotoLocation applied directly to both inner
+// editors, not trusted to propagate from createDiffEditor's options) and the M2
+// plan's model-building approach: models are keyed by
 // file://<repoId>/<sha>/<path> (see modelUri) so they never collide across
 // repositories or revisions, and reused rather than recreated when a
 // repo/rev/path triple repeats (e.g. re-picking a file).
+//
+// This file owns everything about *an* editor and nothing about the column it
+// sits in. A FileDiff keeps its own host element sized to its content, because
+// how tall a diff needs to be is the editor's business and not the band's — the
+// band only ever reads that height back to hold a card's place while the editor
+// is away.
 
 import * as monaco from 'monaco-editor';
+import type { FileStatus } from '@ctrlclickdiff/shared';
 import { readStored, writeStored } from './storage';
 import { api } from './api';
-
-let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
 
 // See plan "Key corrections from research", item 1: definitionLinkOpensInPeek
 // is a top-level IEditorOptions boolean, not nested under gotoLocation.
@@ -21,6 +27,13 @@ const PEEK_OPTIONS: monaco.editor.IEditorOptions = {
     multipleDeclarations: 'peek'
   }
 };
+
+// Every editor currently on screen. The band creates and disposes these as
+// cards scroll in and out of reach, so a view preference has to reach all of
+// them at once — and a card that was away while a toggle flipped has to come
+// back in the new mode, which is why viewOptions() is also spread into the
+// construction bag below.
+const liveEditors = new Set<monaco.editor.IStandaloneDiffEditor>();
 
 // ---------------------------------------------------------------------------
 // View preferences
@@ -70,9 +83,9 @@ function viewOptions(): monaco.editor.IDiffEditorOptions {
   };
 }
 
-/** No-op before initDiff(): the construction option bag carries the same values. */
+/** No-op while nothing is mounted: the construction option bag carries the same values. */
 function applyViewOptions(): void {
-  diffEditor?.updateOptions(viewOptions());
+  for (const editor of liveEditors) editor.updateOptions(viewOptions());
 }
 
 /** Whether the diff is rendering side-by-side. For the sidebar's toggle. */
@@ -83,13 +96,10 @@ export function isSideBySide(): boolean {
 /**
  * Switches between the side-by-side and inline layouts, and remembers which.
  *
- * DO NOT reimplement this by disposing and re-creating the diff editor. Monaco
- * flips renderSideBySide on a live instance perfectly well, and a re-created
- * editor would come up without PEEK_OPTIONS: those are applied to the two inner
- * editors *after* construction precisely because they do not propagate from
- * createDiffEditor's option bag (see initDiff). Nothing would throw and nothing
- * on screen would look wrong — Ctrl+click would just silently stop peeking,
- * which is the one feature this tool is named after.
+ * Flips the option on every live instance rather than rebuilding them. Monaco
+ * handles renderSideBySide on a live editor perfectly well, and a rebuild here
+ * would be both wasteful and a chance to get PEEK_OPTIONS wrong — see
+ * createFileDiff for why that failure is invisible.
  */
 export function setRenderSideBySide(next: boolean): void {
   sideBySide = next;
@@ -114,28 +124,177 @@ export function setCollapseUnchanged(next: boolean): void {
   applyViewOptions();
 }
 
-/**
- * Creates the DiffEditor once on `el` and returns it. Safe to call more than
- * once (e.g. from a re-render) — later calls return the existing instance
- * rather than mounting a second editor.
- */
-export function initDiff(el: HTMLElement): monaco.editor.IStandaloneDiffEditor {
-  if (diffEditor) return diffEditor;
+// Options that make an editor a *slice of a page* rather than its own scrolling
+// viewport. Every one is load-bearing, and the first three are what the band
+// physically cannot work without:
+//
+//  - scrollBeyondLastLine, off. On it, getContentHeight() includes a whole
+//    viewport of trailing padding — measured at 837px of the 3136px a 121-line
+//    file reported, against 856px of pane. Every card would end in a screenful
+//    of nothing.
+//  - handleMouseWheel off and alwaysConsumeMouseWheel off. The second is the one
+//    that matters: it defaults to true, and on true Monaco swallows a wheel
+//    event it cannot use instead of letting it bubble to the scroller.
+//  - vertical scrollbar hidden. There is never anything to scroll — the host is
+//    exactly as tall as the content — so the bar would only ever be a full-height
+//    thumb, once per file.
+//
+// fixedOverflowWidgets moves hovers and suggest widgets to the body, so the
+// card's overflow:hidden (which the rounded corners need) cannot clip them.
+// Peek is unaffected: it is a *zone* widget living inline in the content, which
+// is what lets a card simply grow to contain it.
+const BAND_OPTIONS: monaco.editor.IDiffEditorConstructionOptions = {
+  automaticLayout: true,
+  readOnly: true,
+  scrollBeyondLastLine: false,
+  scrollbar: {
+    vertical: 'hidden',
+    horizontal: 'auto',
+    handleMouseWheel: false,
+    alwaysConsumeMouseWheel: false
+  },
+  renderOverviewRuler: false,
+  overviewRulerLanes: 0,
+  stickyScroll: { enabled: false },
+  fixedOverflowWidgets: true
+};
 
-  diffEditor = monaco.editor.createDiffEditor(el, {
-    automaticLayout: true,
-    readOnly: true,
-    // Spread rather than restated, so the persisted preferences are already in
-    // force on the first render. Passing them only through updateOptions would
-    // paint one frame in the default mode and then flip out from under the
-    // reader.
+/** One file's diff, mounted. Created and disposed by band.ts as cards come and go. */
+export interface FileDiff {
+  /**
+   * The modified (right-hand, "head") pane. The band does reveal maths against
+   * it, and main.ts's debug hook exposes the active card's.
+   */
+  readonly modified: monaco.editor.IStandaloneCodeEditor;
+  /** Resolves once the diff for this pair has actually been computed. */
+  whenDiffComputed(): Promise<void>;
+  /** Current content height in px — what the host element is sized to. */
+  height(): number;
+  /** Drops the editor. Leaves the models: see loadModels. */
+  dispose(): void;
+}
+
+/**
+ * Fetches both sides of `path`, builds (or reuses) their models, mounts a diff
+ * editor on `host` and keeps `host` sized to the editor's content.
+ *
+ * **This is the only place a diff editor is constructed, and that is a
+ * guarantee the band depends on rather than a tidiness preference.**
+ * PEEK_OPTIONS has to be applied to the two inner editors *after* construction,
+ * because it does not propagate from createDiffEditor's option bag (the M1 spike
+ * established this). An editor built anywhere else would look completely normal
+ * and simply never peek — no error, nothing wrong on screen, the one feature
+ * this tool is named after silently gone. Cards are now created and disposed
+ * routinely as the reader scrolls, so that mistake would be permanent and
+ * invisible. Keep the door single.
+ */
+export async function createFileDiff(
+  host: HTMLElement,
+  spec: { repoId: string; path: string; status: FileStatus; baseSha: string; headSha: string }
+): Promise<FileDiff> {
+  const { original, modified } = await loadModels(spec);
+
+  const editor = monaco.editor.createDiffEditor(host, {
+    ...BAND_OPTIONS,
+    // Spread rather than restated, so the persisted preferences — and any
+    // toggle flipped while this card was unmounted — are already in force on
+    // the first paint instead of flipping a frame after it.
     ...viewOptions()
   });
 
-  diffEditor.getOriginalEditor().updateOptions(PEEK_OPTIONS);
-  diffEditor.getModifiedEditor().updateOptions(PEEK_OPTIONS);
+  editor.getOriginalEditor().updateOptions(PEEK_OPTIONS);
+  editor.getModifiedEditor().updateOptions(PEEK_OPTIONS);
 
-  return diffEditor;
+  editor.setModel({ original, modified });
+  liveEditors.add(editor);
+
+  // Auto-height. IDiffEditor has no onDidContentSizeChange of its own — it
+  // extends IEditor, not ICodeEditor (monaco.d.ts:6410) — so the signal has to
+  // come from the two inner editors, which are ICodeEditors and do have it
+  // (monaco.d.ts:6107).
+  //
+  // The max of the two, because side-by-side pads the shorter pane with
+  // alignment view zones while inline mode carries the deletions as view zones
+  // on the modified side; whichever mode is on, one of the two is the full
+  // height and neither is always the one.
+  //
+  // The `=== applied` early return is what stops this recursing: writing the
+  // height trips automaticLayout's ResizeObserver, which lays the editor out
+  // again. It terminates because scrollBeyondLastLine is off, which is exactly
+  // what makes content height independent of viewport height — with it on, a
+  // taller host would mean taller content would mean a taller host.
+  let applied = -1;
+  const syncHeight = (): void => {
+    const px = Math.max(
+      editor.getOriginalEditor().getContentHeight(),
+      editor.getModifiedEditor().getContentHeight()
+    );
+    if (px === applied) return;
+    applied = px;
+    host.style.height = `${px}px`;
+    // Now rather than a frame later, when the ResizeObserver would get here on
+    // its own: a reveal measures line positions immediately after awaiting a
+    // height change, and a measurement against the pre-resize layout is the
+    // whole bug class the cursor-before-reveal rule exists for.
+    editor.layout();
+  };
+
+  const subs = [
+    editor.getOriginalEditor().onDidContentSizeChange(syncHeight),
+    editor.getModifiedEditor().onDidContentSizeChange(syncHeight)
+  ];
+  syncHeight();
+
+  return {
+    modified: editor.getModifiedEditor(),
+    whenDiffComputed: () => whenDiffComputed(editor),
+    height: () => applied,
+    dispose: () => {
+      for (const sub of subs) sub.dispose();
+      liveEditors.delete(editor);
+      editor.dispose();
+    }
+  };
+}
+
+/**
+ * Both sides of one file as models, fetching only what is not already built.
+ *
+ * Models are deliberately never disposed — not here, and not by FileDiff.dispose.
+ * That is what makes a card free to re-mount: `(rev, path)` content is immutable,
+ * so a model that exists is still correct, and scrolling back up costs no
+ * requests at all. Monaco guarantees it, too: a model handed over via setModel
+ * (rather than through the construction bag) survives the editor's disposal.
+ *
+ * The two fetches are also not always two. `git show` on a path that does not
+ * exist at a revision answers with an empty string, so an added file's base side
+ * and a deleted file's head side are known blank without asking — and asking
+ * would cost a subprocess per card.
+ */
+async function loadModels(spec: {
+  repoId: string;
+  path: string;
+  status: FileStatus;
+  baseSha: string;
+  headSha: string;
+}): Promise<{ original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel }> {
+  const { repoId, path, status, baseSha, headSha } = spec;
+  const baseUri = modelUri(repoId, baseSha, path);
+  const headUri = modelUri(repoId, headSha, path);
+
+  const cachedBase = findModel(baseUri);
+  const cachedHead = findModel(headUri);
+  if (cachedBase && cachedHead) return { original: cachedBase, modified: cachedHead };
+
+  const [baseSrc, headSrc] = await Promise.all([
+    cachedBase || status === 'A' ? '' : api.file(repoId, baseSha, path),
+    cachedHead || status === 'D' ? '' : api.file(repoId, headSha, path)
+  ]);
+
+  return {
+    original: cachedBase ?? getOrCreateModel(baseUri, baseSrc, 'kotlin'),
+    modified: cachedHead ?? getOrCreateModel(headUri, headSrc, 'kotlin')
+  };
 }
 
 /**
@@ -147,6 +306,16 @@ export function initDiff(el: HTMLElement): monaco.editor.IStandaloneDiffEditor {
 export function getOrCreateModel(uriString: string, src: string, language: string): monaco.editor.ITextModel {
   const uri = monaco.Uri.parse(uriString);
   return monaco.editor.getModel(uri) ?? monaco.editor.createModel(src, language, uri);
+}
+
+/**
+ * The already-built model for `uriString`, or null. Separate from
+ * getOrCreateModel rather than a flag on it, because the callers want opposite
+ * things: that one guarantees a model exists, this one asks whether fetching
+ * its content can be skipped.
+ */
+function findModel(uriString: string): monaco.editor.ITextModel | null {
+  return monaco.editor.getModel(monaco.Uri.parse(uriString));
 }
 
 /**
@@ -188,56 +357,6 @@ export function parseModelUri(uri: monaco.Uri): { repoId: string; rev: string; p
   return { repoId: uri.authority, rev, path: rest.join('/') };
 }
 
-/**
- * Returns the modified (right-hand, "head") pane's editor instance, or null
- * before initDiff() has run. Exists for main.ts's window.__ccd debug hook, so
- * the M3 verify harness can do coordinate math against the live editor.
- * In-app positioning goes through revealLine() instead, which knows when the
- * editor's layout is safe to scroll against.
- */
-export function getModifiedEditor(): monaco.editor.IStandaloneCodeEditor | null {
-  return diffEditor?.getModifiedEditor() ?? null;
-}
-
-// Guards setModel against out-of-order completions. shell.ts has its own
-// epoch counter, but it cannot cover this one: openFile() only regains control
-// *after* createDiff resolves, by which point setModel has already run. So two
-// overlapping createDiff calls — a commit switch racing a cross-file F12 jump,
-// say — would both point the editor somewhere, and whichever fetch finished
-// last would win regardless of which the user asked for last.
-let diffEpoch = 0;
-
-/**
- * Fetches both sides of `path` at headSha/baseSha in parallel, builds (or
- * reuses) their models, and points the diff editor at them.
- *
- * Superseded calls return without touching the editor.
- */
-export async function createDiff(
-  repoId: string,
-  headSha: string,
-  baseSha: string,
-  path: string
-): Promise<void> {
-  if (!diffEditor) {
-    throw new Error('createDiff: call initDiff(el) before createDiff()');
-  }
-
-  const e = ++diffEpoch;
-  const [baseSrc, headSrc] = await Promise.all([
-    api.file(repoId, baseSha, path),
-    api.file(repoId, headSha, path)
-  ]);
-  // Also skips building the models: a superseded call's models would only be
-  // reachable if that path were opened again, which recreates them anyway.
-  if (e !== diffEpoch) return;
-
-  const original = getOrCreateModel(modelUri(repoId, baseSha, path), baseSrc, 'kotlin');
-  const modified = getOrCreateModel(modelUri(repoId, headSha, path), headSrc, 'kotlin');
-
-  diffEditor.setModel({ original, modified });
-}
-
 // A diff so slow it never arrives must degrade to "position anyway" rather
 // than swallow the jump forever.
 const DIFF_COMPUTE_TIMEOUT_MS = 1000;
@@ -271,33 +390,4 @@ function whenDiffComputed(editor: monaco.editor.IStandaloneDiffEditor): Promise<
       resolve();
     });
   });
-}
-
-/**
- * Positions the cursor at `line` in the modified pane and centers it, once
- * the diff for the current model pair has actually been computed.
- *
- * Cursor first, reveal second — deliberately, not incidentally. It is the
- * *cursor* move that expands a collapsed region: hideUnchangedRegions listens
- * on onDidChangeCursorPosition and calls ensureModifiedLineIsVisible from
- * there. Revealing first would center against the un-expanded layout and let
- * the expansion shift the line back out from under the viewport — which, now
- * that collapsing is on by default, is the ordinary case for any cross-file
- * jump into the middle of a file rather than a hypothetical one.
- *
- * Superseded calls return without touching the editor, on the same rule
- * createDiff follows: the cursor belongs to whichever file the user asked for
- * last, not to whichever jump finished waiting last.
- */
-export async function revealLine(line: number): Promise<void> {
-  const editor = diffEditor;
-  if (!editor) return;
-
-  const e = diffEpoch;
-  await whenDiffComputed(editor);
-  if (e !== diffEpoch) return;
-
-  const modified = editor.getModifiedEditor();
-  modified.setPosition({ lineNumber: line, column: 1 });
-  modified.revealLineInCenter(line);
 }

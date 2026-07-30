@@ -2,12 +2,17 @@
 // switcher. See peekdiff-mvp-iterative-wind.md, "Milestone 4 — Usable
 // shell". Vanilla DOM, no framework.
 //
-// openFile() is the single "switch the diff view to this path" entry point.
-// Both sidebar row clicks (below) and defprovider.ts's registerEditorOpener
-// (via window.__ccd.openPath, wired in main.ts) call it — so a cross-file
-// F12 jump and a manual sidebar click behave identically and share one
-// highlighting/loading path.
+// revealPath() is the single "take the reader to this path" entry point. Both
+// sidebar row clicks (below) and defprovider.ts's registerEditorOpener (via
+// window.__ccd.openPath, wired in main.ts) call it — so a cross-file F12 jump
+// and a manual sidebar click behave identically.
+//
+// The diff itself lives in band.ts: every changed file is stacked in one
+// continuous scroll, so the sidebar no longer picks *which* file is shown, only
+// where in the column to jump to. Which file is "active" therefore comes back
+// the other way, from the band's report of what the reader has scrolled to.
 
+import type * as monaco from 'monaco-editor';
 import type {
   BranchInfo,
   CommitInfo,
@@ -17,9 +22,9 @@ import type {
   ReposListing,
 } from '@ctrlclickdiff/shared';
 import { api } from './api';
+import { initBand, type Band } from './band';
 import { openBranchPalette } from './branchpalette';
 import { openCommitPalette } from './commitpalette';
-import { initDiff, createDiff } from './diff';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
@@ -57,8 +62,9 @@ let selectedRef = '';
 // Each file carries its OWN base/head pair (see PreviewFile) — there is
 // deliberately no module-level headSha/baseSha, because with commits skipped
 // out of the middle of a range there is no single pair that describes every
-// file honestly. `spanRevs` below is the fallback for paths outside the set,
-// and is the only thing entitled to speak for the selection as a whole.
+// file honestly, and the band diffs each card at its file's own pair. `spanRevs`
+// below is the only thing entitled to speak for the selection as a whole, and
+// its one consumer is the debug hook (see getHeadSha).
 //
 // CommitInfo, not bare SHAs, and that is load-bearing: a selection has to
 // outlive the log it came from. A ref's log is capped at 100 commits and a
@@ -88,9 +94,14 @@ let branches: BranchInfo[] = [];
 // silent (no setStatus, no rethrow): the caller holding the current epoch
 // owns the status line and the state.
 //
-// Entry points nest — selectCommits hands off to openFile as its last act,
-// and that handoff claims a fresh epoch. That's deliberate, and the reason
-// no entry point checks staleness after awaiting another one.
+// Entry points nest — selectBranch hands off to loadCommits, which hands off
+// to selectCommits, and each handoff claims a fresh epoch. That's deliberate,
+// and the reason no entry point checks staleness after awaiting another one.
+//
+// revealPath is deliberately NOT one of them: it starts no fetch of its own and
+// owns no state here. What guards the mounts it triggers is band.ts's own epoch
+// plus a token per card — the same argument as this one, at the granularity a
+// column of independent editors actually needs.
 let epoch = 0;
 
 function beginEpoch(): number {
@@ -104,6 +115,7 @@ function stale(e: number): boolean {
 let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 let topBar: TopBar | null = null;
+let band: Band | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
 
 export function getRepoId(): string {
@@ -126,8 +138,8 @@ function requireRepoId(): string {
  *
  * The *span's* pair, not any one file's: with a multi-commit selection those
  * differ, and a debug hook that named one file's revisions would be answering a
- * question nobody asked. What a given file is actually rendered at is
- * `revsFor(path)`.
+ * question nobody asked. What a given file is actually rendered at is its own
+ * `PreviewFile.baseSha`/`headSha`, which the band reads straight off `files`.
  */
 export function getHeadSha(): string {
   return spanRevs.headSha;
@@ -140,6 +152,17 @@ export function getBaseSha(): string {
 /** The commits currently being previewed, newest-first. */
 export function getSelectedShas(): string[] {
   return selection.map((c) => c.sha);
+}
+
+/**
+ * The modified pane of the file the reader is on, for main.ts's debug hook.
+ *
+ * There is no single editor to hand back any more — the band holds one per
+ * mounted file — so "the" editor is defined as the active card's, which is the
+ * one a coordinate-math check means when it says "the editor".
+ */
+export function getActiveEditor(): monaco.editor.IStandaloneCodeEditor | null {
+  return band?.activeEditor() ?? null;
 }
 
 /**
@@ -179,8 +202,11 @@ export function initShell(rootEl: HTMLElement): void {
   resizer.className = 'ccd-resizer';
   resizer.title = 'Drag to resize · double-click to reset';
 
-  const diffPane = document.createElement('div');
-  diffPane.className = 'ccd-diff-pane';
+  // The scroller every changed file is stacked in. It is the app's only vertical
+  // scroll region now — each card's editor is exactly as tall as its content, so
+  // no editor scrolls on its own.
+  const bandEl = document.createElement('div');
+  bandEl.className = 'ccd-band';
 
   // The three columns live in their own box below the header rather than being
   // rows of #app's grid. initResizer is handed *this* element and not rootEl
@@ -190,13 +216,25 @@ export function initShell(rootEl: HTMLElement): void {
   // drag is offset by however far the columns start in from the viewport.
   const content = document.createElement('div');
   content.className = 'ccd-content';
-  content.append(sidebar, resizer, diffPane);
+  content.append(sidebar, resizer, bandEl);
 
   rootEl.append(topBar.el, content);
 
   initResizer(content, resizer);
 
-  initDiff(diffPane);
+  band = initBand(bandEl, {
+    // The band reports which file is being read; the sidebar follows. This is
+    // the reverse of the old direction, where a click decided the active file
+    // and the diff pane obeyed — with everything on one scroll, where the reader
+    // is is a fact to be observed rather than a choice to be recorded.
+    onActivePath: (path) => {
+      activePath = path;
+      highlightActiveRow();
+      rowsByPath.get(path)?.scrollIntoView({ block: 'nearest' });
+    },
+    describeSkipped,
+    onError: (path, err) => setStatus(`Error loading ${path}: ${errorMessage(err)}`)
+  });
 
   void boot();
 }
@@ -301,7 +339,7 @@ function connectLive(): void {
  * Claims an epoch before touching anything: a commit or file load still in
  * flight belongs to the *old* repo, and letting it land would paint that repo's
  * files over this one's. (loadCommits claims another one on the way in — entry
- * points nest here, as they already do for selectCommit -> openFile.)
+ * points nest here, as they already do for selectBranch -> loadCommits.)
  *
  * Monaco's models for the old repo are deliberately left alive. They are keyed
  * by a URI whose authority is the repo id, so nothing this repo creates can
@@ -335,6 +373,9 @@ async function switchRepo(entry: RepoEntry): Promise<void> {
   activePath = '';
   rowsByPath.clear();
   if (fileListEl) fileListEl.innerHTML = '';
+  // Emptied for the same reason as the tree beside it: these cards describe the
+  // outgoing repository's files, and every one of them holds a live editor.
+  band?.clear();
 
   // Not carried over: a refname is only meaningful inside the repo that has it,
   // and `refs/heads/main` naming a branch in both repos is a coincidence, not a
@@ -430,62 +471,40 @@ function selectionTitle(): string {
 }
 
 /**
- * The revision pair `path` should be diffed at.
+ * Scrolls the band to `path`, and to `line` within it when one is given.
  *
- * A file the selection changed answers for itself: `PreviewFile` carries the
- * narrowest honest pair — from just before the first selected commit that
- * touched it, to the selected commit that touched it last. That is what makes
- * skipping a commit mean anything.
+ * Named for what now happens: every changed file is already in the band, so
+ * there is nothing to open. A sidebar click and a cross-file peek jump both land
+ * here, which is what keeps them identical.
  *
- * The span pair is the fallback for a path the selection did NOT change, which
- * a cross-file F12 jump can perfectly well land on: the resolver indexes the
- * whole revision, not just the changed files. Such a path has no per-file
- * answer, and the selection's outer bounds are the closest true one.
+ * A path the selection did not change has no card, and that case is *explained*
+ * rather than silently ignored — see the status message below.
  */
-function revsFor(path: string): { headSha: string; baseSha: string } {
-  return files.find((f) => f.path === path) ?? spanRevs;
-}
-
-/**
- * Switches the diff view to `path` at that file's own head/base SHAs and
- * highlights its sidebar row. `path` need not belong to the selection's
- * changed-file set — see revsFor.
- *
- * Claims an epoch, so an in-flight selection switch or an earlier file open is
- * abandoned rather than allowed to race this one to the diff pane.
- */
-export async function openFile(path: string): Promise<void> {
+export async function revealPath(path: string, line?: number): Promise<void> {
   if (selection.length === 0) {
-    throw new Error('shell.openFile: no commit selected yet');
+    throw new Error('shell.revealPath: no commit selected yet');
   }
+
+  // The band holds exactly the changed files, so a definition in an untouched
+  // file has nowhere to be scrolled to. The peek widget has already rendered
+  // that definition inline — it builds its own inner editor from the model
+  // defprovider.ts created — so the reader is not stuck; they just cannot
+  // *navigate* there, and saying so is the whole point of this branch. The old
+  // single-editor view did navigate, and it is worth knowing what it showed:
+  // it fell back to the selection's span, whose two ends hold identical
+  // content for a file the selection never touched, so the destination was a
+  // diff of a file against itself — every line collapsed behind an unchanged
+  // region bar. A message beats arriving somewhere blank.
   if (!files.some((f) => f.path === path)) {
-    console.debug(`[ccd] openFile: "${path}" is not one of this selection's changed files`);
+    setStatus(`${path} is not changed by this selection — showing its definition inline only.`);
+    return;
   }
-  const e = beginEpoch();
-  // Highlighted before the load rather than after it, so the click has feedback
-  // for the whole round trip — and rolled back in the catch, because a sidebar
-  // that names a file the diff pane is not showing is worse than a slow one.
-  const previousPath = activePath;
-  activePath = path;
-  highlightActiveRow();
-  const revs = revsFor(path);
-  try {
-    await createDiff(requireRepoId(), revs.headSha, revs.baseSha, path);
-  } catch (err) {
-    // Superseded while the diff was loading: this failure is no longer the
-    // one the user is waiting on, and every caller turns a throw into a
-    // status message — so swallowing it here is what keeps the winner's
-    // status line intact.
-    //
-    // The rollback below therefore runs on the winner's path only, and that
-    // ordering is the whole guarantee: a stale call must leave `activePath`
-    // alone, since a newer openFile already owns it and reverting here would
-    // point the sidebar at a file two calls ago.
-    if (stale(e)) return;
-    activePath = previousPath;
-    highlightActiveRow();
-    throw err;
-  }
+
+  // No epoch claim, and no rollback either. Both existed to stop two model swaps
+  // racing to one editor; a scroll has no such hazard — the band's own epoch and
+  // per-card tokens guard the mounts, and `activePath` is now reported *by* the
+  // band from where the reader actually is rather than guessed before a load.
+  await band?.revealPath(path, line);
 }
 
 /**
@@ -695,8 +714,8 @@ function isCommit(commit: CommitInfo | undefined): commit is CommitInfo {
 }
 
 /**
- * Resolves a selection of commits into its changed files, renders the file
- * list, and auto-opens the first non-deleted file.
+ * Resolves a selection of commits into its changed files, then renders both the
+ * sidebar tree and the band of diffs.
  *
  * `next` may name one commit (the ordinary review) or several (a ghost squash);
  * nothing below this point distinguishes them, because a preview of one commit
@@ -738,25 +757,19 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
 
   renderFileList(files);
 
-  // Prefer the first non-deleted file: a deleted file's head side is empty
-  // (git show HEAD:path fails -> api.file resolves to ''), which would open
-  // the diff on an empty pane with nothing to Ctrl+click.
-  const first = files.find((f) => f.status !== 'D') ?? files[0];
-  if (!first) {
-    setStatus(
-      selection.length > 1
+  // Every changed file, deleted ones included. The old single-file view had to
+  // skip past a deletion to avoid opening on an empty pane with nothing to
+  // Ctrl+click; a band has no such problem, and a review that silently omitted a
+  // deleted file would be hiding a change.
+  band?.render(requireRepoId(), files);
+
+  setStatus(
+    files.length > 0
+      ? ''
+      : selection.length > 1
         ? 'No .kt files changed in these commits.'
         : 'No .kt files changed in this commit.',
-    );
-    return;
-  }
-
-  setStatus('');
-  try {
-    await openFile(first.path);
-  } catch (err) {
-    setStatus(`Error loading diff: ${errorMessage(err)}`);
-  }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -916,7 +929,7 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
   }
 
   row.addEventListener('click', () => {
-    openFile(node.path).catch((err: unknown) => {
+    revealPath(node.path).catch((err: unknown) => {
       setStatus(`Error loading diff: ${errorMessage(err)}`);
     });
   });

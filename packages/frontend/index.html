@@ -59,6 +59,10 @@
            than the 12px gutter: at the 220px minimum sidebar width a depth-4
            row has to give the indent back to the filename. */
         --ccd-tree-indent: 10px;
+        /* Resting height of a file card's sticky header. A *minimum*, not a
+           fixed height: a long path wraps to a second line rather than being
+           truncated past its filename. */
+        --ccd-card-header-h: 32px;
       }
 
       html, body {
@@ -443,9 +447,132 @@
         user-select: none !important;
       }
 
-      .ccd-diff-pane {
+      /* ------------------------------------------------------------------
+         The review band (band.ts)
+
+         Every changed file, stacked, in one scroll. This element is the app's
+         only vertical scroll region: each card is exactly as tall as its
+         editor's content (diff.ts's createFileDiff writes the height, and turns
+         off scrollBeyondLastLine so "content" means content), and the editors
+         are built with their own wheel handling and vertical scrollbar off so
+         the gesture reaches this box instead of dying in a pane.
+
+         position:relative is not decoration — it makes this the offsetParent for
+         everything inside, which is the coordinate space band.ts's reveal maths
+         converts line positions into.
+         ------------------------------------------------------------------ */
+      .ccd-band {
+        position: relative;
         min-width: 0;
         min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      .ccd-card {
+        border: 1px solid var(--ccd-border);
+        border-radius: var(--ccd-radius-lg);
+        background: var(--ccd-canvas);
+        /* Rounds the editor's square corners off. Safe because the only widgets
+           that would overflow a card are hovers and suggests, and createFileDiff
+           sets fixedOverflowWidgets so those render against <body>; peek is a
+           zone widget living inline in the content, so the card grows for it
+           rather than clipping it. */
+        overflow: hidden;
+        /* Stops a flex item from being squeezed below its content height — the
+           heights here are computed, and flex must not renegotiate them. */
+        flex: 0 0 auto;
+      }
+
+      /* Sticky, so the path stays readable while its own diff scrolls past. The
+         z-index keeps it over Monaco's line content; the opaque background is
+         what makes the code slide under it rather than through it. */
+      .ccd-card-header {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: var(--ccd-card-header-h);
+        padding: 5px 10px;
+        background: var(--ccd-canvas-subtle);
+        border-bottom: 1px solid var(--ccd-border);
+      }
+
+      .ccd-card.collapsed .ccd-card-header {
+        border-bottom: none;
+      }
+
+      .ccd-card-twisty {
+        flex: 0 0 auto;
+        width: 18px;
+        padding: 0;
+        border: 0;
+        border-radius: var(--ccd-radius);
+        background: transparent;
+        color: var(--ccd-fg-muted);
+        font-size: 11px;
+        line-height: 18px;
+        cursor: pointer;
+        transition: transform 80ms ease-out;
+      }
+
+      .ccd-card-twisty:hover {
+        background: var(--ccd-hover);
+        color: var(--ccd-fg);
+      }
+
+      .ccd-card-twisty[aria-expanded='false'] {
+        transform: rotate(-90deg);
+      }
+
+      /* The full path, because a band has no sidebar selection to say which file
+         you are looking at.
+
+         It WRAPS rather than ellipsising, and that is the deliberate choice: a
+         Kotlin source path is mostly package directories with the one
+         identifying part — the filename — at the very end, so truncating the end
+         hides exactly what the reader needs and truncating the front needs an
+         rtl trick that reorders the two spans below. Two lines occasionally is
+         cheaper than a name you cannot read. min-height on the header rather
+         than height is what lets it. */
+      .ccd-card-path {
+        flex: 1 1 auto;
+        min-width: 0;
+        font: 12px ui-monospace, monospace;
+        overflow-wrap: anywhere;
+      }
+
+      /* Directory dim, basename bright: read as one flat string, a deep path
+         buries the only part that identifies the file. */
+      .ccd-card-dir {
+        color: var(--ccd-fg-muted);
+      }
+
+      .ccd-card-name {
+        color: var(--ccd-fg-emphasis);
+        font-weight: 600;
+      }
+
+      .ccd-card-body {
+        /* Height is written in px by diff.ts. Nothing here may fight it. */
+        min-width: 0;
+      }
+
+      /* Placeholder text for a card whose editor has not arrived yet. On the
+         ::after rather than as a child node, so the loading state cannot collide
+         with the element Monaco is about to mount into. */
+      .ccd-card.loading .ccd-card-body::after {
+        content: 'Loading…';
+        display: block;
+        padding: 10px 12px;
+        color: var(--ccd-fg-muted);
+        font-size: 12px;
       }
 
       /* ------------------------------------------------------------------
