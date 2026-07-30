@@ -155,6 +155,19 @@ export function getSelectedShas(): string[] {
 }
 
 /**
+ * Whether `path` is one of the files this selection changed — the line between
+ * "part of the review" and "merely part of the repository".
+ *
+ * The band draws it (a path outside the set has no card, see revealPath) and
+ * Ctrl+click's candidate list draws it too, which is why it is a named predicate
+ * rather than a `files.some` at each site: those two are answering the same
+ * question, and they must never answer it differently.
+ */
+export function isInReview(path: string): boolean {
+  return files.some((f) => f.path === path);
+}
+
+/**
  * The modified pane of the file the reader is on, for main.ts's debug hook.
  *
  * There is no single editor to hand back any more — the band holds one per
@@ -495,7 +508,7 @@ export async function revealPath(path: string, line?: number): Promise<void> {
   // content for a file the selection never touched, so the destination was a
   // diff of a file against itself — every line collapsed behind an unchanged
   // region bar. A message beats arriving somewhere blank.
-  if (!files.some((f) => f.path === path)) {
+  if (!isInReview(path)) {
     setStatus(`${path} is not changed by this selection — showing its definition inline only.`);
     return;
   }

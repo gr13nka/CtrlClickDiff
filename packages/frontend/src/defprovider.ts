@@ -26,6 +26,7 @@ import * as monaco from 'monaco-editor';
 import type { DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { getOrCreateModel, modelUri, parseModelUri } from './diff';
+import { markPeekScope } from './peekscope';
 
 // Memoizes GET /api/file per "<repoId>/<rev>/<path>" so the two
 // provideDefinition calls per click (see file header, fact 1) never
@@ -47,12 +48,21 @@ function memoizedFile(repoId: string, rev: string, path: string): Promise<string
 let registered = false;
 
 /**
+ * Whether a repo-relative path is one of the files the current selection
+ * changed. Injected rather than imported so this file keeps having no ambient
+ * state of its own: a resolution belongs to the model it started from, and the
+ * *review* it is judged against belongs to the shell (see main.ts, which wires
+ * shell.isInReview in the same place it wires window.__ccd).
+ */
+export type InReview = (path: string) => boolean;
+
+/**
  * Registers the kotlin definition provider and the cross-file editor
  * opener. Call once during app init, after monaco is available (see
  * main.ts). Safe to call more than once — later calls are no-ops, so
  * accidental double-init never double-registers the provider.
  */
-export function registerKotlinDefinitions(): void {
+export function registerKotlinDefinitions(inReview: InReview): void {
   if (registered) return;
   registered = true;
 
@@ -73,7 +83,15 @@ export function registerKotlinDefinitions(): void {
         return null;
       }
 
-      const locations: monaco.languages.Location[] = [];
+      // Split as we go, by whether the selection under review changed the file a
+      // definition lives in. Both halves are answered here rather than by the
+      // resolver: which commits are being reviewed is not a fact about the
+      // repository at a revision, and /api/def deliberately knows nothing of it.
+      const inside: monaco.languages.Location[] = [];
+      const outside: monaco.languages.Location[] = [];
+      const insideLabels: string[] = [];
+      const outsideLabels: string[] = [];
+
       for (const loc of defs) {
         // Same repo as the model the click started in: a definition never
         // crosses repositories, so the id travels straight through.
@@ -82,12 +100,34 @@ export function registerKotlinDefinitions(): void {
         // target model before returning, from the *same* memoized fetch a
         // second provideDefinition call for this click would reuse.
         getOrCreateModel(uriStr, await memoizedFile(repoId, rev, loc.path), 'kotlin');
-        locations.push({
-          uri: monaco.Uri.parse(uriStr),
+        const uri = monaco.Uri.parse(uriStr);
+        const location = {
+          uri,
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)
-        });
+        };
+        if (inReview(loc.path)) {
+          inside.push(location);
+          // Monaco's own label for the row this location will become — asked of
+          // monaco.Uri rather than assembled here, so peekscope.ts's selectors
+          // cannot drift from whatever the widget actually renders.
+          insideLabels.push(uri.fsPath);
+        } else {
+          outside.push(location);
+          outsideLabels.push(uri.fsPath);
+        }
       }
-      return locations;
+
+      markPeekScope({ inReview: insideLabels, outside: outsideLabels });
+
+      // In-review first, and a stable partition, so the resolver's same-file
+      // hits stay ahead of its cross-file ones inside each half. This decides
+      // the *jump* — `firstReference()`, goToCommands.js:143, which is what a
+      // Ctrl+click inside the peek preview takes. It does NOT decide the peek's
+      // own list or which candidate it opens on: the list is re-sorted by URI
+      // (referencesModel.js:120) and the opening candidate is the one nearest
+      // the clicked file by URI prefix (referencesController.js:152). Do not
+      // "fix" the peek by reordering here — it has no effect at all.
+      return [...inside, ...outside];
     }
   });
 
