@@ -31,12 +31,28 @@
 // the one it is painted on — silently, and only in long lists. An attribute
 // selector cannot drift: it matches whatever the row is showing right now.
 
+import type * as monaco from 'monaco-editor';
+
 /** What one Ctrl+click's candidates are, split by whether the review contains them. */
 export interface PeekScope {
-  /** Monaco's own row label (`uri.fsPath`) for each candidate inside the review. */
-  inReview: readonly string[];
-  /** …and for each candidate outside it. */
-  outside: readonly string[];
+  /** Model URIs of the candidates inside the review. */
+  inReview: readonly monaco.Uri[];
+  /** …and of the candidates outside it. */
+  outside: readonly monaco.Uri[];
+}
+
+/**
+ * The text Monaco puts in a file row's `aria-label`, which is what the rules and
+ * the row walk below both match on.
+ *
+ * `fsPath` rather than the URI string, and asked of `monaco.Uri` rather than
+ * assembled here: the widget derives the row label the same way (via its label
+ * service), so anything this file builds by hand would be a second definition of
+ * a format we do not own — and it fails silently, because a selector that matches
+ * nothing looks exactly like a peek with nothing to mark.
+ */
+function rowLabel(uri: monaco.Uri): string {
+  return uri.fsPath;
 }
 
 const STYLE_ID = 'ccd-peek-scope';
@@ -114,8 +130,10 @@ function rulesFor({ inReview, outside }: PeekScope): string {
   return rules.join('\n');
 }
 
-function labelSelector(labels: readonly string[]): string {
-  return labels.map((label) => `.ref-tree .reference-file > .monaco-icon-label[aria-label="${cssString(label)}"]`).join(',\n');
+function labelSelector(uris: readonly monaco.Uri[]): string {
+  return uris
+    .map((uri) => `.ref-tree .reference-file > .monaco-icon-label[aria-label="${cssString(rowLabel(uri))}"]`)
+    .join(',\n');
 }
 
 /**
@@ -220,7 +238,7 @@ function watchForPeek(): void {
  */
 function nudgeIntoReview(tree: Element): void {
   const rows = [...tree.querySelectorAll('.monaco-list-row')];
-  const inReview = new Set(latest.inReview);
+  const inReview = new Set(latest.inReview.map(rowLabel));
 
   const selected = rows.findIndex((row) => row.classList.contains('selected'));
   if (selected < 0) return;

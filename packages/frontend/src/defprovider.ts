@@ -89,8 +89,6 @@ export function registerKotlinDefinitions(inReview: InReview): void {
       // repository at a revision, and /api/def deliberately knows nothing of it.
       const inside: monaco.languages.Location[] = [];
       const outside: monaco.languages.Location[] = [];
-      const insideLabels: string[] = [];
-      const outsideLabels: string[] = [];
 
       for (const loc of defs) {
         // Same repo as the model the click started in: a definition never
@@ -100,24 +98,17 @@ export function registerKotlinDefinitions(inReview: InReview): void {
         // target model before returning, from the *same* memoized fetch a
         // second provideDefinition call for this click would reuse.
         getOrCreateModel(uriStr, await memoizedFile(repoId, rev, loc.path), 'kotlin');
-        const uri = monaco.Uri.parse(uriStr);
         const location = {
-          uri,
+          uri: monaco.Uri.parse(uriStr),
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)
         };
-        if (inReview(loc.path)) {
-          inside.push(location);
-          // Monaco's own label for the row this location will become — asked of
-          // monaco.Uri rather than assembled here, so peekscope.ts's selectors
-          // cannot drift from whatever the widget actually renders.
-          insideLabels.push(uri.fsPath);
-        } else {
-          outside.push(location);
-          outsideLabels.push(uri.fsPath);
-        }
+        (inReview(loc.path) ? inside : outside).push(location);
       }
 
-      markPeekScope({ inReview: insideLabels, outside: outsideLabels });
+      // The URIs, not labels for them: how a candidate is named in the peek list
+      // is that widget's business, and peekscope.ts is the only file that should
+      // have to know it.
+      markPeekScope({ inReview: inside.map((l) => l.uri), outside: outside.map((l) => l.uri) });
 
       // In-review first, and a stable partition, so the resolver's same-file
       // hits stay ahead of its cross-file ones inside each half. This decides
