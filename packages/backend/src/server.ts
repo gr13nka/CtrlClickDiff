@@ -237,6 +237,27 @@ app.get<{ Querystring: { repo?: string; ref?: string } }>(
  */
 const SHA_LIST_PATTERN = '^[0-9a-f]{40}(,[0-9a-f]{40})*$';
 
+/**
+ * One full 40-char lowercase SHA — exactly what `/api/preview` hands the
+ * frontend for both sides of every file (a commit sha, or EMPTY_TREE_SHA for a
+ * root commit's base side).
+ *
+ * This whitelist carries more weight than the two above, because `/api/def`'s
+ * rev is the one that reaches `git grep`, and **`git grep` has no
+ * `--end-of-options`**: it tries to resolve that string as a revision and dies
+ * with `fatal: unable to resolve revision: --end-of-options`. The fence
+ * `listCommits` and `commitSpan` bracket their revs with simply does not exist
+ * for this subcommand, so the route is the only place the shape can be
+ * enforced. Same trap family as `--not` vs `^<sha>`; different subcommand, and
+ * here no fence is available at all.
+ *
+ * A second reason, measured on a blobless partial clone: an unrecognised rev is
+ * not a cheap local failure. `git grep deadbeef...` there answered
+ * `fatal: remote error: upload-pack: not our ref` — git had already gone to the
+ * network before failing.
+ */
+const REV_PATTERN = '^[0-9a-f]{40}$';
+
 // GET /api/preview?repo=<id>&shas=<sha>,<sha>,... -> Preview
 //
 // The changed files of a *selection* of commits, each with the revision pair
@@ -337,10 +358,12 @@ app.get<{
         type: 'object',
         required: ['name', 'file', 'line', 'rev'],
         properties: {
-          name: { type: 'string', minLength: 1 },
+          // maxLength bounds what reaches git's argv as a search pattern. A
+          // Monaco word longer than this is not an identifier anyone clicked.
+          name: { type: 'string', minLength: 1, maxLength: 256 },
           file: { type: 'string', minLength: 1 },
           line: { type: 'integer', minimum: 1 },
-          rev: { type: 'string', minLength: 1 },
+          rev: { type: 'string', pattern: REV_PATTERN },
           ...REPO_QUERY_PROPERTY,
         },
       },
