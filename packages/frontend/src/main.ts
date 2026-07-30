@@ -1,6 +1,6 @@
 import './monaco-env';
 import type * as monaco from 'monaco-editor';
-import { registerKotlinDefinitions } from './defprovider';
+import { registerDefinitions } from './defprovider';
 import { installTheme } from './theme';
 import {
   initShell,
@@ -61,7 +61,7 @@ if (!app) throw new Error('main.ts: #app element not found');
 
 // The predicate, not the file list: the provider asks about one path at a time
 // and must see the *current* selection, which a snapshot taken here could not.
-registerKotlinDefinitions(isInReview);
+registerDefinitions(isInReview);
 
 // Before initShell(), which starts the first cards loading: a theme set
 // afterwards would repaint them a frame late, and the theme is global state

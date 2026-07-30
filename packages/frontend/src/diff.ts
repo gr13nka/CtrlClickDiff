@@ -14,7 +14,7 @@
 // is away.
 
 import * as monaco from 'monaco-editor';
-import type { FileStatus } from '@ctrlclickdiff/shared';
+import { languageForPath, type FileStatus } from '@ctrlclickdiff/shared';
 import { readStored, writeStored } from './storage';
 import { api } from './api';
 
@@ -291,9 +291,15 @@ async function loadModels(spec: {
     cachedHead || status === 'D' ? '' : api.file(repoId, headSha, path)
   ]);
 
+  // A path no registered language claims still gets a model — it just gets no
+  // highlighting and no definition provider. Falling back to 'plaintext' rather
+  // than skipping keeps "every changed file has a card" true, which the band
+  // depends on.
+  const language = languageForPath(path)?.id ?? 'plaintext';
+
   return {
-    original: cachedBase ?? getOrCreateModel(baseUri, baseSrc, 'kotlin'),
-    modified: cachedHead ?? getOrCreateModel(headUri, headSrc, 'kotlin')
+    original: cachedBase ?? getOrCreateModel(baseUri, baseSrc, language),
+    modified: cachedHead ?? getOrCreateModel(headUri, headSrc, language)
   };
 }
 

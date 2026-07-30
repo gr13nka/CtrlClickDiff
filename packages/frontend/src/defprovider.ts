@@ -23,7 +23,7 @@
 // model it started from.
 
 import * as monaco from 'monaco-editor';
-import type { DefLocation } from '@ctrlclickdiff/shared';
+import { LANGUAGES, type DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { getOrCreateModel, modelUri, parseModelUri } from './diff';
 import { applyPeekScope } from './peekscope';
@@ -57,16 +57,16 @@ let registered = false;
 export type InReview = (path: string) => boolean;
 
 /**
- * Registers the kotlin definition provider and the cross-file editor
- * opener. Call once during app init, after monaco is available (see
- * main.ts). Safe to call more than once — later calls are no-ops, so
- * accidental double-init never double-registers the provider.
+ * Registers the definition provider for every language in the registry, plus
+ * the cross-file editor opener. Call once during app init, after monaco is
+ * available (see main.ts). Safe to call more than once — later calls are
+ * no-ops, so accidental double-init never double-registers the provider.
  */
-export function registerKotlinDefinitions(inReview: InReview): void {
+export function registerDefinitions(inReview: InReview): void {
   if (registered) return;
   registered = true;
 
-  monaco.languages.registerDefinitionProvider('kotlin', {
+  const provider: monaco.languages.DefinitionProvider = {
     async provideDefinition(model, position) {
       const word = model.getWordAtPosition(position);
       if (!word) return null;
@@ -97,7 +97,10 @@ export function registerKotlinDefinitions(inReview: InReview): void {
         // REQUIRED for cross-file peek (see file header, fact 2): build the
         // target model before returning, from the *same* memoized fetch a
         // second provideDefinition call for this click would reuse.
-        getOrCreateModel(uriStr, await memoizedFile(repoId, rev, loc.path), 'kotlin');
+        // Same language as the model the click started in — a definition is
+        // resolved within the language of the file it was asked from, so the
+        // target's language is known without consulting the registry again.
+        getOrCreateModel(uriStr, await memoizedFile(repoId, rev, loc.path), model.getLanguageId());
         const location = {
           uri: monaco.Uri.parse(uriStr),
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)
@@ -120,7 +123,13 @@ export function registerKotlinDefinitions(inReview: InReview): void {
       // "fix" the peek by reordering here — it has no effect at all.
       return [...inside, ...outside];
     }
-  });
+  };
+
+  // The same provider instance for every language: it reads what it needs from
+  // the model it was handed, so there is nothing per-language to close over.
+  for (const language of LANGUAGES) {
+    monaco.languages.registerDefinitionProvider(language.id, provider);
+  }
 
   // F12 / "go to definition" on a cross-file Location routes through here
   // instead of monaco's default no-op for resources other than the current

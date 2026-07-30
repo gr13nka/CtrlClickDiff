@@ -13,13 +13,14 @@
 // the other way, from the band's report of what the reader has scrolled to.
 
 import type * as monaco from 'monaco-editor';
-import type {
-  BranchInfo,
-  CommitInfo,
-  Preview,
-  PreviewFile,
-  RepoEntry,
-  ReposListing,
+import {
+  SOURCE_EXTENSIONS,
+  type BranchInfo,
+  type CommitInfo,
+  type Preview,
+  type PreviewFile,
+  type RepoEntry,
+  type ReposListing,
 } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { initBand, type Band } from './band';
@@ -776,12 +777,16 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
   // deleted file would be hiding a change.
   band?.render(requireRepoId(), files);
 
+  // The extensions come from the registry, the sentence does not: phrasing is
+  // this call site's business, and a shared label helper would have exactly one
+  // caller (same argument storage.ts makes for refusing readNumber/readJson).
+  const kinds = SOURCE_EXTENSIONS.join('/');
   setStatus(
     files.length > 0
       ? ''
       : selection.length > 1
-        ? 'No .kt files changed in these commits.'
-        : 'No .kt files changed in this commit.',
+        ? `No ${kinds} files changed in these commits.`
+        : `No ${kinds} files changed in this commit.`,
   );
 }
 
