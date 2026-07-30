@@ -181,6 +181,19 @@ const WATCH_MS = 1500;
 /** Frames to let Monaco's own reveal finish after it has selected a row. */
 const SETTLE_FRAMES = 3;
 
+/**
+ * The scope of the most recent resolution, read once — when a widget is first
+ * seen — and passed down from there.
+ *
+ * *When* it is sampled is the whole of its correctness, so it is worth being
+ * explicit about. Sampling at watch-start would be wrong: a Ctrl+hover starts a
+ * watch, and the click that opens the peek is a later, different call. Sampling
+ * inside the nudge would be wrong the other way: a hover over some other word
+ * during the frames it waits would swap the scope out from under a widget that is
+ * already on screen. The moment the widget appears is the one instant at which
+ * "the newest resolution" and "the resolution this peek is showing" are the same
+ * thing.
+ */
 let latest: PeekScope = { inReview: [], outside: [] };
 
 /**
@@ -214,6 +227,9 @@ function watchForPeek(): void {
     if (tree && !handled.has(tree) && tree.querySelector('.monaco-list-row.selected')) {
       handled.add(tree);
       watching = false;
+      // Sampled here and carried, rather than read again inside the nudge — see
+      // `latest` for why this instant is the right one.
+      const scope = latest;
       // A few frames after the selection lands, not the same one: `setSelection`
       // resolves before the reveal it started has finished settling the preview,
       // and acting on top of that in-flight work is what turns the nudge into a
@@ -221,7 +237,7 @@ function watchForPeek(): void {
       let settle = SETTLE_FRAMES;
       const go = (): void => {
         if (settle-- > 0) requestAnimationFrame(go);
-        else nudgeIntoReview(tree);
+        else nudgeIntoReview(tree, scope);
       };
       requestAnimationFrame(go);
       return;
@@ -244,9 +260,9 @@ function watchForPeek(): void {
  * nothing in the review there is nowhere better to go. Both mean "leave it
  * alone", which is why they are silent.
  */
-function nudgeIntoReview(tree: Element): void {
+function nudgeIntoReview(tree: Element, scope: PeekScope): void {
   const rows = [...tree.querySelectorAll('.monaco-list-row')];
-  const inReview = new Set(latest.inReview.map(rowLabel));
+  const inReview = new Set(scope.inReview.map(rowLabel));
 
   const selected = rows.findIndex((row) => row.classList.contains('selected'));
   if (selected < 0) return;
@@ -254,25 +270,30 @@ function nudgeIntoReview(tree: Element): void {
   const openedOn = fileLabelOwning(rows, selected);
   if (openedOn === null || inReview.has(openedOn)) return;
 
-  const target = rows.findIndex((row) => {
-    const label = fileLabelOf(row);
-    return label !== null && inReview.has(label);
-  });
-  if (target < 0) return;
-
-  const targetRow = rows[target];
-  const targetLabel = targetRow === undefined ? null : fileLabelOf(targetRow);
-  if (targetRow === undefined || targetLabel === null) return;
+  const target = firstFileRow(rows, (label) => inReview.has(label));
+  if (target === null) return;
 
   // Monaco expands only the group it revealed into, so the target's references
   // are not in the DOM yet — and clicking the file row is what expands it. The
   // preview does not follow a file row (the widget reacts to references only),
   // so that click alone changes nothing the reader can see; it exists to put the
   // row we actually want on screen.
-  if (targetRow.getAttribute('aria-expanded') === 'false') {
-    click(targetRow);
+  if (target.row.getAttribute('aria-expanded') === 'false') {
+    click(target.row);
   }
-  clickFirstReference(tree, targetLabel, EXPAND_FRAMES);
+  clickFirstReference(tree, target.label, EXPAND_FRAMES);
+}
+
+/** The first file row whose label `wanted` accepts, with that label. */
+function firstFileRow(
+  rows: readonly Element[],
+  wanted: (label: string) => boolean,
+): { row: Element; label: string } | null {
+  for (const row of rows) {
+    const label = fileLabelOf(row);
+    if (label !== null && wanted(label)) return { row, label };
+  }
+  return null;
 }
 
 /**
