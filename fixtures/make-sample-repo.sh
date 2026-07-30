@@ -16,11 +16,15 @@
 #   directories) and, in LongService.kt, a 2-line change buried in a ~120-line
 #   file so hideUnchangedRegions has something to collapse.
 #
-# Repo B at $HOME/ccd-sample-repo-2 (3 commits, 2 branches) is deliberately
+# Repo B at $HOME/ccd-sample-repo-2 (5 commits, 3 branches) is deliberately
 # small and deliberately unlike repo A (package com.acme.inventory, different
 # class names) so it is obvious at a glance which repo the UI has loaded. Its
 # directory basename differs from repo A's because the backend derives the repo
 # id slug from the basename.
+#   feature/scoped-defs (2 commits) is where Ctrl+click has to choose between two
+#   definitions of one name — one inside the review, one outside it, the outside
+#   one being the closer of the two on disk. It lives in repo B rather than repo
+#   A because repo A's branch list is in a committed README screenshot.
 #
 # Idempotent: wipes and recreates both repos on every run. Commit dates are
 # pinned (with an explicit UTC offset) so the resulting commit SHAs are
@@ -615,6 +619,65 @@ EOF
 
 git add "$INV_DIR"
 git commit -q -m "Add Report.kt rendering on-hand counts per SKU"
+
+# ---------------------------------------------------------------------------
+# Branch feature/scoped-defs: one name, two definitions, and the *nearer* one
+# outside the review. This exists for Ctrl+click's candidate list and nothing
+# else, so it is worth spelling out what makes it load-bearing.
+#
+# `render` is declared in both near/Label.kt and far/Label.kt, and near/Caller.kt
+# calls it unqualified. Selecting commit 2 alone puts far/Label.kt and
+# near/Caller.kt in the review and leaves near/Label.kt out of it — while
+# near/Label.kt is the one Monaco's peek prefers, because it picks the candidate
+# whose URI shares the longest prefix with the clicked file and `near/Caller.kt`
+# shares a whole directory with it. So the peek's own instinct is the wrong
+# answer here, which is exactly the case that has to be testable.
+#
+# Both files declare the package their directory implies, so the duplicate
+# top-level `render` is a redeclaration Kotlin would actually accept. The
+# resolver matches on the identifier alone and has no notion of imports, so it
+# offers both — that ambiguity is the fixture, not a flaw in it.
+# ---------------------------------------------------------------------------
+git checkout -q -b feature/scoped-defs main
+
+export GIT_AUTHOR_DATE="2024-02-04T00:00:00+00:00"
+export GIT_COMMITTER_DATE="2024-02-04T00:00:00+00:00"
+
+mkdir -p "$INV_DIR/near" "$INV_DIR/far"
+
+cat > "$INV_DIR/near/Label.kt" <<'EOF'
+package com.acme.inventory.near
+
+import com.acme.inventory.Sku
+
+fun render(sku: Sku): String = sku.code
+EOF
+
+git add "$INV_DIR/near"
+git commit -q -m "Add near/Label.kt rendering a SKU as its bare code"
+
+# Commit 2: A far/Label.kt (a second `render`), A near/Caller.kt (calls it)
+export GIT_AUTHOR_DATE="2024-02-05T00:00:00+00:00"
+export GIT_COMMITTER_DATE="2024-02-05T00:00:00+00:00"
+
+cat > "$INV_DIR/far/Label.kt" <<'EOF'
+package com.acme.inventory.far
+
+import com.acme.inventory.Sku
+
+fun render(sku: Sku): String = "${sku.code} - ${sku.description}"
+EOF
+
+cat > "$INV_DIR/near/Caller.kt" <<'EOF'
+package com.acme.inventory.near
+
+import com.acme.inventory.Sku
+
+fun describe(sku: Sku): String = render(sku)
+EOF
+
+git add "$INV_DIR/near" "$INV_DIR/far"
+git commit -q -m "Add far/Label.kt and near/Caller.kt calling render()"
 
 git checkout -q main
 
