@@ -353,7 +353,10 @@ The Kotlin WASM grammar didn't load. Confirm `vendor/tree-sitter-kotlin.wasm` ex
 
 Stated up front so it isn't a disappointment later:
 
-- **Only Kotlin.** No other language, and no plans for one.
+- **Only Kotlin.** It is the only language that ships. Which extensions are reviewed and which
+  grammar answers for them is a one-row table now (`packages/shared/src/languages.ts`) rather than a
+  dozen scattered literals, but adding a row also means vendoring a ~5 MB grammar and a tags query,
+  and nobody has.
 - **Not semantically accurate.** Resolution is by **name**: no overload resolution, no import
   following, no jumps into the stdlib or libraries. It's built for "jump to the declaration in my own
   Kotlin", and it tells you when a name is ambiguous.
@@ -369,8 +372,8 @@ This is a **guarantee, not an aspiration**. The code has no path to write or del
 
 - **Every git call** goes through one function (`packages/backend/src/git.ts`'s `run()`) using
   `execFile` with an **argument array, never a shell string**, so request input can't inject shell
-  commands. The only subcommands invoked anywhere are `log`, `rev-parse`, `ls-tree`, `for-each-ref`
-  and `show` — all read-only. Nothing calls `checkout`, `reset`, `clean`, `commit`, `push`, or
+  commands. The only subcommands invoked anywhere are `log`, `rev-parse`, `for-each-ref`, `show`
+  and `grep` — all read-only. Nothing calls `checkout`, `reset`, `clean`, `commit`, `push`, or
   anything that moves a ref.
 - **The backend never writes the filesystem.** Its entire fs surface is `readFile` (the WASM grammar,
   once at boot), `realpath`/`stat` to validate a repo path, `readdir` for the picker, `existsSync`,
@@ -396,10 +399,13 @@ Two processes and a swappable "brain":
   renders as an inline peek. Kotlin syntax highlighting is built into Monaco.
 - **Backend** (`packages/backend`) — TypeScript + Fastify, serving git content (`git show`) and a
   symbol index over HTTP.
-- **The brain** (`packages/backend/src/resolver`) — a `TreeSitterResolver` behind the
-  `SymbolResolver` interface in `packages/shared`. It parses every `.kt` file at the reviewed
-  revision with [tree-sitter](https://tree-sitter.github.io/) (WASM) plus a Kotlin grammar, builds a
-  `name → declaration location` index, and answers "where is this declared?". The interface keeps it
+- **The brain** (`packages/backend/src/resolver`) — a `TreeSitterResolver` behind the one-method
+  `SymbolResolver` interface in `packages/shared`. To answer "where is this declared?" it asks
+  `git grep` which files mention the identifier at all, then parses just those with
+  [tree-sitter](https://tree-sitter.github.io/) (WASM) plus a Kotlin grammar. The work is
+  proportional to the identifier rather than to the repository: on a 2,646-file repo a typical
+  Ctrl+click reads about seven files instead of all of them. It used to index the whole revision up
+  front, which cost 11.5s and ~320 MB *per revision* before the first answer. The interface keeps it
   swappable for a future ctags- or LSP-backed resolver.
 
 Repo scoping is **stateless**: there is no "current repo" on the server. Every data route takes

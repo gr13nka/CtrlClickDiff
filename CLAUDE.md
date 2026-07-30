@@ -14,9 +14,11 @@ no build step**, and `packages/shared` is consumed as raw `.ts` source (`"export
 ```
 packages/shared     git-types.ts (git wire shapes) repo-types.ts (registry + browse shapes)
                     types.ts (the SymbolResolver contract, documented on the interface)
+                    languages.ts (the language registry — one entry, and why)
 packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (what a commit
                     selection means) repos.ts browse.ts watch.ts
-                    resolver/TreeSitterResolver.ts (tree-sitter symbol index)
+                    resolver/TreeSitterResolver.ts (grep for candidates, parse only those)
+                    resolver/grammars.ts (grammar asset paths, keyed by language id)
 packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
                     diff.ts (one file's editor) defprovider.ts api.ts
                     peekscope.ts (the review, as seen by peek's candidate list)
@@ -60,6 +62,23 @@ pnpm smoke                          # asserts the Kotlin WASM loads with a match
 bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
 node docs/capture-screenshots.mjs   # regenerates the README screenshots (app must be running)
 ```
+
+**Ctrl+click latency has a recorded baseline; beat it or explain why.** Measured against
+`~/lets-plot` (2646 `.kt`, 9.6 MB, blobless clone), backend at `REPO_ROOT=~/lets-plot`, one
+`/api/def` per identifier from `AestheticsUtil.kt` at `44db1f1a`:
+
+| | whole-revision index | grep-scoped, cold | warm |
+|---|---|---|---|
+| `PlotSvgExport` (7 candidate files) | 11.56 s | 0.067 s | 0.040 s |
+| `render` (60 candidates, 45 hits) | 11.56 s | 0.337 s | 0.032 s |
+| `letsPlot` (a package segment) | 11.56 s | 0.230 s | 0.034 s |
+| a word that is not a symbol | 11.56 s | 0.031 s | 0.029 s |
+| RSS after one revision | +353 MB | +32 MB | |
+| RSS after a second revision | +319 MB | **+0 MB** | |
+
+End-to-end in a browser (mousePressed → `.zone-widget`) that is **55 ms**. The warm column is the
+one trade: it used to be 0.001 s off a resident index, and the grep now runs every time. 30 ms is
+imperceptible in a gesture and it is what buys the bounded memory.
 
 The fixtures carry cases that only exist to be verified, and deleting one silently removes the
 only way to see a behaviour fail. Repo B's **`feature/scoped-defs`** is the newest: `render` is
@@ -126,9 +145,22 @@ the three-file default selection cannot demonstrate centred reveal because its c
 than the viewport and `scrollTop` cannot move at all. Check what the numbers *can* show before
 believing them.
 
+**Two more ways a peek assertion lies, both of which produced a confident false failure.** The
+peek's rows are not the only things carrying an `aria-label`: each reference also has a
+description (`"1 symbol in Label.kt, full path …"`, `"fun render(…) on line 5 at column 5"`).
+Selecting by `aria-label` *containing* a path finds one of those first, and they are never marked —
+so a dimming check against them compares 1.0 with 1.0 and "fails" while the feature works.
+Filter to labels that **are** `uri.fsPath` (they start with `//`), which is what `peekscope.ts`'s
+generated CSS keys on. Second: in the repo picker, a single click *selects* and `Open` acts on the
+selection, so clicking both in the same turn opens whatever was selected before — the test opened
+the wrong repository and reported a missing branch. Wait for the header crumb to name the repo
+before continuing.
+
 When you fix a bug, **reproduce it first and record the numbers**. Several fixes in the history
 would have been unfalsifiable otherwise — "the reveal is wrong" means nothing next to "it
-scrolled to 1862px when the line was at 2622px".
+scrolled to 1862px when the line was at 2622px". The same rule caught a claim in *this* work: a
+commit message said the client now issued one `/api/def` per Ctrl+click, and counting the requests
+over CDP said two.
 
 ## Constraints that look arbitrary and are not
 
@@ -288,6 +320,63 @@ for a job started with `&` from a shell without job control, and a signal ignore
 *cannot be trapped*, so backgrounding `start.sh` from a test script silently disables the very
 handler under test and it hangs forever instead. SIGTERM is not ignored and is the cheap check.
 
+**`git grep` accepts no `--end-of-options`, and that is why `/api/def` whitelists its rev.** It
+tries to *resolve* the string as a revision — `fatal: unable to resolve revision:
+--end-of-options`. The fence `listCommits` and `commitSpan` bracket their revs with does not exist
+for this subcommand, so `REV_PATTERN` at the route is the only place the shape can be enforced.
+Same trap family as `--not` vs `^<sha>`; here no fence is available at all. A second reason,
+measured on a blobless clone: a bad rev is not a cheap local failure — `git grep` against a
+fabricated SHA answered `fatal: remote error: upload-pack: not our ref`, having gone to the
+network first.
+
+**Three more `git grep` facts, each of which silently does the wrong thing.** It **exits 1 when
+nothing matches**, and no-match is the *common* case here (any word Ctrl+hovered that is not a
+symbol) — `run()` rejects on non-zero, so `candidateFiles` catches code 1 and rethrows everything
+else. `-e` is a **regex** unless you say otherwise: `Plot.vgExport` matched `PlotSvgExport`, so the
+identifier is escaped before it goes in. And output records are `<rev>:<path>`, stripped by
+`rev.length + 1` rather than by splitting on `:` because a path may contain one; `-z` is what
+avoids having to de-quote `core.quotePath` escaping, and `--full-name` is what stops
+"`repoRoot` is the toplevel" from being load-bearing.
+
+**Candidate discovery ignores `import`/`package` lines, and that is a filter, not a heuristic.**
+Without it a *package segment* costs a whole-repo parse: `letsPlot` matched 2274 of lets-plot's
+2646 files and took 6.70 s — every time, because 2274 candidates against a 2000-entry cache meant
+each pass evicted its own earlier files. Package lines sit at the top of every file, so a reader
+with Ctrl held drags the pointer straight through them. With the keywords excluded it is 57 files
+and 0.23 s. Nothing can be lost, because a declaration cannot appear on an `import` or `package`
+line — verified rather than argued: across six identifiers, 8648 files were dropped and **every**
+line mentioning the name in them was an import or package line, 0 exceptions. An extension
+function (`fun Foo.bar()`) is on a `fun` line and survives; `import a.b.C as render` is an alias,
+not a declaration, and is correctly gone. The keywords are per language
+(`Language.nonDeclaringLineKeywords`); needing the leading negative lookahead is why the grep is
+`-P` and the name is escaped.
+
+**Delete every tree-sitter tree, and let nothing derived from one outlive it.** Trees are WASM
+pointers and are **not** garbage collected; the old whole-revision index leaked one per file per
+revision, which is most of its ~320 MB. `readSymbols` deletes in a `finally`, and `toDefMatch`
+copies `node.text` and `startPosition` out *before* that — `Node`, `QueryMatch` and `QueryCapture`
+all hold into the tree's arena, so the natural refactor (return the match, classify it later) is a
+use-after-free that typechecks perfectly. `Query` also has `.delete()`; **do not call it** — a
+query is compiled once per language and reused, a tree belongs to one parse. One shared `Parser`
+per language is safe under the read pool only because `parse()` is *synchronous*: the concurrency
+is on the I/O. Do not add a parser pool.
+
+**The read pool interleaves read and parse, and 8 is a measured plateau, not a preference.** On
+264 candidates: sequential 557 ms; concurrency 4/8/16/32/64 gives 267/260/267/267/274 ms. Reads
+plateau at 4 because libuv spawns processes on the loop thread, so every `execFile` costs ~1 ms of
+*main-thread* work however many are in flight. 8 rather than 4 because end-to-end, reads
+overlapping parses, it measured 803 ms against 1007 ms. The tempting tidy-up — await every read,
+then parse in a loop — is a single 313 ms synchronous block, because the await on each subprocess
+is the only thing yielding the event loop (measured max lag as written: 27 ms).
+
+**`git cat-file --batch` was measured and declined.** 264 blobs: 24 ms batched against 260 ms as
+individual `git show` spawns. An 11× ratio on a number that is *not* the bottleneck — parse is
+313 ms in the same query — so it would take the worst identifier from 803 ms to ~570 ms and the
+typical one from 37 ms to ~35 ms, in exchange for a new subcommand, the first place the backend
+writes to a subprocess's stdin, a length-prefixed protocol parser, and bypassing `run()`. The
+trigger to revisit is a number, not a taste: a p95 Ctrl+click over ~1 s that profiling attributes
+to blob reads rather than parses.
+
 **`PORT` is not fully wired, on purpose-for-now.** `packages/frontend/vite.config.ts` hardcodes
 the proxy target `127.0.0.1:5178`, so setting `PORT` moves the backend out from under the
 frontend. `start.sh` warns when the two disagree rather than silently "fixing" it, and the README
@@ -324,6 +413,59 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
 
 ## Decisions worth not undoing
 
+- **`SymbolResolver` is ONE method, and asking is the whole interface.** There used to be a
+  `buildIndex(repoRoot, revision)` beside `resolve`, whose only documented rule was that callers
+  await it first — a step that existed to be awaited. It was there because the tree-sitter
+  implementation could not answer without parsing every file at the revision, and that is a fact
+  about *that implementation*, not about the question; the contract already said per-implementation
+  setup does not belong on the interface. `POST /api/index` went with it (no caller since
+  `api.prewarm` was deleted, and keeping a route whose whole semantics is "index the revision"
+  would be a live re-entry point into the bug), and `listKtFilesAtRev` went too, so **`ls-tree`
+  left the codebase** — a sibling to `diff-tree` leaving when `commitSpan` replaced
+  `changedKtFiles`. An implementation that needs preparation does it inside `resolve`, at the scale
+  the query needs.
+- **The resolver's work is proportional to the identifier, not to the repository.** `git grep`
+  names the files that mention the name; only those are read and parsed. This is why there is no
+  prewarm and no first-click penalty to amortize, and why `shell.ts` no longer has a comment
+  explaining a disabled one. Candidates are partitioned same-file-first **before** the reads, not
+  after: the pool completes out of order, so ordering the results would make the answer depend on
+  scheduling. `candidateFiles` sorts with a plain `sort()` and **not** `localeCompare`, which would
+  make the answer depend on the machine's `LANG`.
+- **The per-file symbol cache is bounded, and the bound is the point.** Key is
+  `(repoRoot, revision, path)`, ~6.2 KB an entry measured, capped at 2000 (~12 MB). The old
+  per-revision index had no cap and grew RSS ~320 MB *per revision*, so a ghost squash spanning ten
+  revisions cost ~3 GB; this holds ~12 MB however many revisions a selection spans. No TTL —
+  `(repo, rev, path)` names immutable content, the same reason `diff.ts` never disposes a model, so
+  an entry cannot become wrong, only surplus. Entries are **promises**, which buys in-flight
+  coalescing for free and costs nothing because the promise is infallible by construction. The cap
+  must stay comfortably above the largest realistic candidate set: it was 2000 against a *believed*
+  worst of 264, and the real worst turned out to be 2274 (a package segment), which thrashed until
+  the import/package filter cut it to 57.
+- **`DefQuery.lang` was deleted rather than widened, and the rule that replaced it is
+  "a definition is resolved within the language of the file you clicked in."** The field was a
+  `'kotlin'` literal carried by every layer and read by nothing. Deriving beats declaring: a
+  declared language can disagree with the file it names, a derived one cannot. A field that can be
+  derived is a field to delete.
+- **The language registry has one entry and exists to eliminate duplication, not to anticipate.**
+  `packages/shared/src/languages.ts` replaced thirteen literals across three packages that were
+  already drifting in *kind* — `'.kt'` as a suffix test, `'*.kt'` as a git pathspec, `'kotlin'` as
+  a Monaco language id, `'kotlin'` as an HTTP enum — and would have failed silently at runtime if
+  one drifted, the same hazard class as splitting `modelUri`/`parseModelUri`. `Language.id` **is**
+  Monaco's language id, deliberately: that identity is what makes `registerDefinitionProvider` and
+  `createModel` agree by construction. Do not add a `monacoId` that would always equal `id`.
+  Filesystem paths are in the backend's `resolver/grammars.ts` because `shared` is imported by the
+  browser. The revisit trigger is **a second grammar**, and that is also the test of whether the
+  seam is real.
+- **`/api/def` is memoized on the client, bounded, and the bound is why it is allowed to persist.**
+  Monaco calls `provideDefinition` twice per Ctrl+click. An in-flight-only map was written first
+  and measured: it left the count at **two**, because the two calls do not overlap — the hover
+  resolves about a second before the mouse goes down. Only a retained answer removes the second
+  request; storing the promise still covers the overlapping case. Retaining is sound because
+  `(repoId, rev, file, line, name)` names immutable content, so a bound (256, LRU) rather than an
+  expiry is what keeps it honest. Rejections are evicted — a failed fetch is not an answer, and
+  caching it would make one network blip permanent for that word. It memoizes the **fetch** only:
+  both provider bodies must still run, because each calls `applyPeekScope`, and returning early
+  from the second would silently break the out-of-review nudge.
 - **A preview's revision pair is per FILE, not per selection.** For each path,
   `base = first parent of the earliest selected commit that touched it`, `head = the latest
   selected commit that touched it` (`preview.ts`). This is the whole reason commits can be
@@ -437,9 +579,13 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
 
 This is a guarantee, not an aspiration, and the README states it publicly — so re-check it when
 you touch the backend. Every git call goes through `git.ts`'s `run()` with an **argument array,
-never a shell string**. The only subcommands invoked anywhere are `log`, `rev-parse`, `ls-tree`,
-`for-each-ref`, `show` — `diff-tree` left the codebase when `commitSpan` replaced the per-commit
-`changedKtFiles`, and nothing should bring it back. There is no write-capable fs API in the
+never a shell string**. The only subcommands invoked anywhere are `log`, `rev-parse`,
+`for-each-ref`, `show`, `grep` — `diff-tree` left the codebase when `commitSpan` replaced the
+per-commit `changedKtFiles`, and `ls-tree` left with `listKtFilesAtRev` when the resolver stopped
+indexing whole revisions; nothing should bring either back. `grep` is read-only like the rest, but
+it is the one that **cannot** be fenced with `--end-of-options` (see the constraint above), which
+is why `/api/def`'s `rev` is whitelisted as `^[0-9a-f]{40}$` at the route and its `name` is both
+length-capped and regex-escaped before it reaches argv. There is no write-capable fs API in the
 backend at all — the whole surface is `readFile`, `realpath`, `stat`, `readdir`, `existsSync`,
 `fs.watch`. `listCommits` carries three redundant injection guards (leading-`-` rejection,
 `--end-of-options`, trailing `--`) plus a route-level whitelist pattern; keep all of them.
