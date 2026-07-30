@@ -342,13 +342,16 @@ function escapeRegex(literal: string): string {
  * parses seven files instead of 2646 — on lets-plot this call is ~30ms and
  * replaces a whole-revision index that cost 11.5s.
  *
- * `ignoreLineKeywords` is what keeps that true for boilerplate identifiers.
- * A name that appears at the top of every file — a package segment — otherwise
- * costs a whole-repo parse: `letsPlot` matched 2274 of 2646 files and took 6.7s.
- * Excluding lines that begin with these keywords takes it to 57 files. It is a
- * filter rather than a heuristic: a declaration cannot live on an `import` or
- * `package` line, so nothing a tags query would capture can be lost. See
- * Language.nonDeclaringLineKeywords for the full argument.
+ * `ignoreLinePrefixes` is what keeps that true for boilerplate identifiers. A
+ * name that appears at the top of every file otherwise costs a whole-repo
+ * parse, and Kotlin has two such kinds of boilerplate: the package line
+ * (`letsPlot` matched 2274 of 2646 files, 6.7s) and the license header comment
+ * every file carries (`Copyright`, `license`, `file`, `this` — ~2571 files
+ * each, 9.4-15.0s). Excluding lines that begin with these takes those to 0-23
+ * files while barely touching real identifiers. They are filters rather than
+ * heuristics: a declaration cannot live on an `import`/`package` line nor on
+ * one starting `//` or `*`. See Language.nonDeclaringLinePrefixes for the full
+ * argument and the evidence.
  *
  * The flags are load-bearing and were each verified on git 2.43:
  *
@@ -378,14 +381,20 @@ export async function candidateFiles(
   rev: string,
   name: string,
   extensions: readonly string[],
-  ignoreLineKeywords: readonly string[] = [],
+  ignoreLinePrefixes: readonly string[] = [],
 ): Promise<string[]> {
   const pathspecs = extensions.map((ext) => `*${ext}`);
   const word = `\\b${escapeRegex(name)}\\b`;
+  // `\b` only where the prefix ends in a word character — it keeps `import` from
+  // matching `imported`, but after `//` or `*` it would demand a word boundary
+  // between two non-word characters and never match at all.
+  const prefixes = ignoreLinePrefixes.map(
+    (prefix) => escapeRegex(prefix) + (/\w$/.test(prefix) ? '\\b' : ''),
+  );
   // Anchored at the line start so it rejects the LINE, not the match: a line
-  // beginning with one of these keywords is skipped however the name appears on it.
-  const pattern = ignoreLineKeywords.length
-    ? `^(?!\\s*(?:${ignoreLineKeywords.map(escapeRegex).join('|')})\\b).*${word}`
+  // beginning with one of these is skipped however the name appears on it.
+  const pattern = prefixes.length
+    ? `^(?!\\s*(?:${prefixes.join('|')})).*${word}`
     : word;
 
   let stdout: string;

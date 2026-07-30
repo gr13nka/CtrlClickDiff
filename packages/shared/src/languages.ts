@@ -30,28 +30,51 @@ export interface Language {
   /** Extensions this language claims, leading dot included, matched as a path suffix. */
   readonly extensions: readonly string[];
   /**
-   * Keywords that begin a line which can NEVER declare anything.
+   * Line beginnings that can NEVER carry a declaration, matched after leading
+   * whitespace. A prefix ending in a word character is additionally bounded by
+   * `\b`, so `import` does not also match `imported`.
    *
    * Candidate discovery greps for an identifier and parses every file that
    * mentions it, so a name appearing in boilerplate at the top of every file
-   * costs a whole-repo parse. In Kotlin `letsPlot` is a *package segment*:
-   * `git grep -w letsPlot` matches 2274 of lets-plot's 2646 files and a
-   * Ctrl+hover over any package line cost 6.7s. Ignoring lines that start with
-   * these keywords takes it to 57 files and ~0.2s, and it also cuts the ordinary
-   * ambiguous case (`render`, 264 -> 60).
+   * costs a whole-repo parse. Kotlin has TWO such kinds of boilerplate, and
+   * both were measured on lets-plot (2646 .kt):
    *
-   * This is a filter, not a heuristic, and the difference matters: a
-   * declaration cannot appear on an `import` or `package` line, so nothing that
-   * tags.scm would have captured can be excluded by it. An extension function
-   * (`fun Foo.bar()`) is on a `fun` line and survives; `import a.b.C as render`
-   * is an alias rather than a declaration and is correctly dropped.
+   *  - the *package* line. `letsPlot` is a package segment, matched 2274 files,
+   *    and a Ctrl+hover over any package line cost 6.7s.
+   *  - the *license header comment*, which every file in that repo carries. Its
+   *    words — Copyright, license, source, code, found, file, this, that —
+   *    matched ~2571 files EACH and cost 9.4-15.0s per hover.
+   *
+   * With both excluded: Copyright and license go to 0 candidate files, `file`
+   * to 23, `code` to 18. Real identifiers barely move (`render` 57 -> 51,
+   * `apply` 348 -> 335, `size` 696 -> 662), which is the point — this removes
+   * noise, not signal.
+   *
+   * These are filters, not heuristics, and the difference is the whole
+   * justification: a declaration cannot appear on an `import` or `package`
+   * line, nor on a line whose first non-space characters are `//` or `*`.
+   * Verified rather than argued — across eleven identifiers, 15025 files were
+   * dropped and every line mentioning the name in them was a comment, import or
+   * package line, 0 exceptions. An extension function (`fun Foo.bar()`) is on a
+   * `fun` line and survives; `import a.b.C as render` is an alias rather than a
+   * declaration and is correctly dropped.
+   *
+   * `/*` is deliberately NOT in this list, only `*`. A line opening a block
+   * comment can legally also close it and declare something
+   * (`/* note *\/ fun foo()`), so excluding it would not be a filter any more.
+   * A line *starting* with `*` is a comment continuation or terminator and
+   * cannot be anything else.
    */
-  readonly nonDeclaringLineKeywords: readonly string[];
+  readonly nonDeclaringLinePrefixes: readonly string[];
 }
 
 /** Every language this tool reviews. One entry, on purpose — see the file header. */
 export const LANGUAGES: readonly Language[] = [
-  { id: 'kotlin', extensions: ['.kt'], nonDeclaringLineKeywords: ['import', 'package'] },
+  {
+    id: 'kotlin',
+    extensions: ['.kt'],
+    nonDeclaringLinePrefixes: ['import', 'package', '//', '*'],
+  },
 ];
 
 /** Every extension any registered language claims, in registry order. */

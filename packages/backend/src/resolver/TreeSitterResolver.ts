@@ -165,7 +165,7 @@ export class TreeSitterResolver implements SymbolResolver {
     if (!language || !grammar) return [];
 
     const candidates = await candidateFiles(
-      repoRoot, revision, query.name, language.extensions, language.nonDeclaringLineKeywords,
+      repoRoot, revision, query.name, language.extensions, language.nonDeclaringLinePrefixes,
     );
     const grepMs = performance.now() - startedAt;
     // How many of the candidates still have to be read and parsed. Counted
