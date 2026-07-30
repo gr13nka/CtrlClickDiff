@@ -55,6 +55,13 @@
         --ccd-sidebar-w: 300px;
         --ccd-sidebar-w-min: 220px;
         --ccd-sidebar-w-max: 640px;
+        /* Widest the review column grows to before it stops and centres, leaving
+           canvas either side. Not a stylistic flourish: a diff read side by side
+           is two columns of code, and past about this width a line of Kotlin has
+           more empty space after it than text in it, while the eye has to travel
+           the whole monitor to get from the left pane to the right one. Wide
+           enough that neither pane wraps at a normal font size, and no wider. */
+        --ccd-content-w-max: 1600px;
         /* Horizontal step per level of file-tree nesting. Deliberately smaller
            than the 12px gutter: at the 220px minimum sidebar width a depth-4
            row has to give the indent back to the filename. */
@@ -91,18 +98,40 @@
         height: 100vh;
         font: 13px/1.4 system-ui, sans-serif;
         color: var(--ccd-fg);
+        /* Shows through as the gutter either side of the capped content column
+           below. Inset rather than canvas, on the same rule as the sidebar and
+           header: chrome recedes, code does not. */
+        background: var(--ccd-canvas-inset);
       }
 
       /* The three-column row. --ccd-sidebar-w is written here by initResizer
          (shell.ts hands it this element), which is also why the drag maths is
          measured against this box: it is the one whose left edge the sidebar
-         track starts at. */
+         track starts at.
+
+         Capped and centred, so on a wide monitor the review sits in the middle
+         with canvas either side rather than being stretched to the bezels. The
+         header above deliberately stays full-width and left-aligned: it names the
+         repo, ref and commits, which is orientation rather than content, and
+         indenting it to match would only push it away from the corner the eye
+         already goes to. Below the cap this is a no-op — width:100% means a
+         narrow window simply fills, with no horizontal scroll. */
       .ccd-content {
         display: grid;
         grid-template-columns: var(--ccd-sidebar-w) 6px minmax(0, 1fr);
+        /* Local, as .ccd-modal does it — there is no global reset here. Required,
+           not cosmetic: with the default content-box, width:100% plus the 1px
+           borders below is 100% + 2px, which overflows the viewport horizontally
+           the moment the window is narrower than the cap. */
+        box-sizing: border-box;
         width: 100%;
+        max-width: var(--ccd-content-w-max);
+        margin-inline: auto;
         min-width: 0;
         min-height: 0;
+        /* The seam between the gutter and the review, so the centred column reads
+           as a surface rather than as content that happens to stop. */
+        border-inline: 1px solid var(--ccd-border);
       }
 
       .ccd-topbar {
