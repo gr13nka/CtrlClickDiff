@@ -22,11 +22,18 @@
 //    id passes vacuously. The `mouseMoved` before the press is what makes Monaco
 //    resolve and underline the link.
 //  - the word's position is found in the DOM rather than through the editor
-//    instance, because the page does not expose one.
+//    instance, because there is no longer a single editor to ask: every changed
+//    file has its own, and `window.__ccd.modifiedEditor` answers for whichever
+//    card is at the top of the scroller, not necessarily the one holding the word.
 //
 // Shot order matters: the palette is captured BEFORE the peek, so no peek widget
 // is left sitting behind the modal, and the pointer is parked off the code before
 // every capture so Monaco's hover tooltip does not photobomb it.
+//
+// Waits are on `.ccd-card ... .monaco-diff-editor` rather than on `.view-line`
+// counts. A card exists for every changed file as soon as the preview lands but is
+// empty until its editor mounts, and cards mount lazily — so "some lines are on
+// screen" no longer implies the file this script is about is one of them.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -36,7 +43,11 @@ const BASE = process.argv[2] ?? 'http://localhost:5173';
 const OUT = process.argv[3] ?? import.meta.dirname;
 const REPO_NAME = 'ccd-sample-repo';
 const PORT = 9411;
-const W = 1440, H = 620;
+// Wider than --ccd-content-w-max (1600px) on purpose: below the cap the review
+// column simply fills the window, and a shot taken there would not show that it
+// is capped and centred at all. Tall enough that several file cards are on screen
+// at once, which is the point of the band.
+const W = 1900, H = 820;
 
 mkdirSync(OUT, { recursive: true });
 
@@ -163,12 +174,20 @@ await evaluate(
   `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Open')?.click()`,
 );
 await waitFor(`document.querySelector('.ccd-file-row')`, 'the changed-file tree');
-await waitFor(`document.querySelectorAll('.view-line').length > 2`, 'the diff to render');
+// A card is reserved for every changed file the moment the preview lands, but it
+// is empty until its editor mounts — so waiting on `.ccd-card` alone races the
+// fetch behind it, and every shot below needs rendered code.
+await waitFor(`document.querySelector('.ccd-card .monaco-diff-editor')`, 'the first diff to render');
 
-// Main.kt is what both of the next two shots want on screen.
+// Main.kt is what both of the next two shots want on screen. In the band this
+// scrolls to its card rather than replacing the view, so the wait is for the
+// card to be mounted, not for lines to appear from nowhere.
 await clickRow('.ccd-file-row', 'Main.kt', 'could not find Main.kt');
-await waitFor(`document.querySelectorAll('.view-line').length > 2`, 'the Main.kt diff');
-await sleep(1200);
+await waitFor(
+  `document.querySelector('.ccd-card[data-path="Main.kt"] .monaco-diff-editor')`,
+  'the Main.kt card',
+);
+await sleep(1500);
 
 console.log('shot: commit palette');
 await clickCrumb(2);
@@ -180,8 +199,16 @@ if (await evaluate(`!!document.querySelector('.ccd-palette-row')`)) {
 }
 
 console.log('shot: cross-file peek');
+// In the MODIFIED pane specifically. Both panes render the word, and a plain
+// document walk finds the original's copy first — which opens the peek inside the
+// left-hand "before" column, confined to its width. The right-hand pane is the
+// code a reviewer is actually reading, and it is where the wider peek renders.
 const box = await evaluate(`(() => {
-  const it = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  // Main.kt's card by name, not the first one on screen — that is Legacy.kt,
+  // whose modified side is empty because the commit deletes it.
+  const pane = document.querySelector('.ccd-card[data-path="Main.kt"] .editor.modified');
+  if (!pane) return null;
+  const it = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
   for (let n = it.nextNode(); n; n = it.nextNode()) {
     const i = n.textContent.indexOf('shout');
     if (i < 0 || !n.parentElement?.closest('.view-line')) continue;
@@ -214,10 +241,11 @@ await clickCrumb(1);
 await waitFor(`document.querySelector('.ccd-palette-row')`, 'the branch palette', 10_000);
 await clickRow('.ccd-palette-row', 'feature/wide', 'could not find feature/wide');
 await waitFor(`document.querySelectorAll('.ccd-file-row').length > 5`, 'the wide file tree');
-await sleep(1500);
-await clickRow('.ccd-file-row', 'LongService.kt', 'could not find LongService.kt');
-await waitFor(`document.querySelectorAll('.view-line').length > 10`, 'the long diff');
-await sleep(1500);
+await waitFor(`document.querySelector('.ccd-card .monaco-diff-editor')`, 'the wide band');
+// Left at the top of the band rather than jumped to one file: with twelve files
+// stacked, what this shot is for is the band itself — several cards, their sticky
+// headers, and the deep paths the tree collapses into single-child chains.
+await sleep(2500);
 await shot('screenshot-wide.png');
 
 console.log('done');

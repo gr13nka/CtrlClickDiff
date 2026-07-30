@@ -49,9 +49,11 @@ CtrlClickDiff gives you both at once: a real diff, with language-aware navigatio
 
 ## What it looks like
 
-![The changed-file tree beside a diff with unchanged regions collapsed](docs/screenshot-wide.png)
+![Every changed file stacked in one scroll, unchanged regions collapsed](docs/screenshot-wide.png)
 
-A wide change on a feature branch. The sidebar collapses the deep Kotlin package
+A wide change on a feature branch. **Every changed file is stacked in one continuous scroll**, next
+file directly below the last, each under a sticky header naming it — so reviewing twelve files is
+one gesture, not twelve. The sidebar collapses the deep Kotlin package
 `src/main/kotlin/org/example/wide` into a **single row** instead of five nested ones, and unchanged
 regions fold away — so a 2-line edit inside a 120-line file is all that's on screen, under a
 `60 hidden lines` bar you can click to expand. The header is a breadcrumb of what you're reviewing:
@@ -97,6 +99,9 @@ you can review several commits as one diff.
 
 ### The diff itself
 
+- **One continuous scroll** over every changed file, not one file at a time. The sidebar tree
+  scrolls you to a file and highlights whichever one you've scrolled to; each file's header has a
+  chevron to fold that file away.
 - **Side-by-side or inline**, toggled live.
 - **Unchanged regions collapsed** by default (at `git diff -U3` context), with a toggle to show
   everything.
@@ -261,7 +266,8 @@ The review loop follows the breadcrumb in the header, left to right:
    and the checked-out branch is marked.
 3. **Pick a commit.** Click the third chip for the searchable commit palette. To review several
    commits as one diff, flip **Ghost squash** and tick the ones you want.
-4. **Click a changed `.kt` file** in the sidebar to open its diff.
+4. **Scroll.** Every changed `.kt` file is already there, one below the next; clicking a file in the
+   sidebar jumps to it.
 5. **Ctrl+click any symbol** to peek its declaration inline.
 
 ### Gestures
@@ -270,7 +276,8 @@ The review loop follows the breadcrumb in the header, left to right:
 |---|---|
 | **Ctrl+click** a symbol (**Cmd** on macOS) | peek its declaration inline, in the diff |
 | **Esc** | close the peek, back to where you were |
-| **F12** | open the declaration's file |
+| **F12** | scroll to the declaration, if the selection changed that file |
+| **Click** a file's header chevron | fold that file away, or bring it back |
 | **↑ / ↓** in a palette | move between rows |
 | **Enter** in a palette | choose the highlighted row |
 | **Esc** in a palette | close it, change nothing |
@@ -290,7 +297,8 @@ into files they never touched.
 
 The one case that can't be exact: a file edited by **both** a selected and a skipped commit has no
 two-revision representation, so the skipped commit's edits are unavoidably inside that file's diff.
-Those files get a **⚠** in the sidebar whose tooltip names the commits responsible, by subject.
+Those files get a **⚠** — on the sidebar row and on the file's own header — whose tooltip names the
+commits responsible, by subject.
 
 ## Configuration
 

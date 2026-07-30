@@ -17,7 +17,8 @@ packages/shared     git-types.ts (git wire shapes) repo-types.ts (registry + bro
 packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (what a commit
                     selection means) repos.ts browse.ts watch.ts
                     resolver/TreeSitterResolver.ts (tree-sitter symbol index)
-packages/frontend   Vite + Monaco. shell.ts (all UI state) diff.ts defprovider.ts api.ts
+packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
+                    diff.ts (one file's editor) defprovider.ts api.ts
                     topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
                     filetree.ts repopicker.ts live.ts theme.ts
                     modal.ts (backdrop/aria/Escape for all three dialogs)
@@ -42,6 +43,11 @@ moving it to `resizer.ts` is what made a module boundary enforce the claim.
 The unit of review is a **selection of commits**, not a commit. One commit selected is the
 ordinary case; several is a "ghost squash" (see below). There is deliberately no second code
 path for the single-commit case — `Preview` describes both.
+
+The unit of *display* is the whole selection at once: `band.ts` stacks every changed file in one
+scroller, one diff editor per file, and `diff.ts` makes those editors rather than owning one.
+Nothing shows a single file any more, which is why `openFile` became `revealPath` — a click scrolls,
+it does not load.
 
 ## Verification
 
@@ -91,6 +97,27 @@ modules under a `?t=<stamp>` URL, so a fresh `import('/src/api.ts')` can hand ba
 instance with its own module state — `api.ts`'s `pathById` comes up empty and the 409 recovery
 appears broken when it is not. Drive the real UI and let the app's own instance do the work.
 
+**Three ways a CDP check silently measures the wrong thing now that every file has an editor**, all
+three of which produced a confident false failure while building the band:
+
+- **Waiting on `.view-line` (or `.ccd-card`) is not waiting for the file you mean.** A card exists
+  for every changed file the moment the preview lands but is empty until its editor mounts, and cards
+  mount lazily — so "lines are on screen" no longer implies *these* lines are. Wait on
+  `.ccd-card[data-path="X"] .monaco-diff-editor`.
+- **`window.__ccd.modifiedEditor` answers for the card at the top of the scroller**, which during a
+  jump is not the destination. Measuring a reveal through it reported the cursor on line 1 of a
+  different file. Measure inside the target card's own DOM.
+- **A side-by-side card has TWO `.cursors-layer`s**, and `card.querySelector` returns the
+  *original* pane's. Its cursor sits wherever the alignment view zones put it — that read as "the
+  cursor landed on line 61" for a jump to line 100 that was in fact exactly right. Scope to
+  `.editor.modified`.
+
+The same trap in the other direction: **an assertion that passes because the fixture is too small
+proves nothing.** `feature/wide` cannot demonstrate bounded mounting (see the constraint below), and
+the three-file default selection cannot demonstrate centred reveal because its content is shorter
+than the viewport and `scrollTop` cannot move at all. Check what the numbers *can* show before
+believing them.
+
 When you fix a bug, **reproduce it first and record the numbers**. Several fixes in the history
 would have been unfalsifiable otherwise — "the reveal is wrong" means nothing next to "it
 scrolled to 1862px when the line was at 2622px".
@@ -104,9 +131,16 @@ another. `repos.ts` asserts this. The id is in the *authority* because an author
 contain `/`, which is exactly why it is an opaque id rather than a path.
 
 **`PEEK_OPTIONS` is applied with `updateOptions` to both inner editors after construction**, not
-passed to `createDiffEditor`. The M1 spike proved they do not propagate from the option bag.
-Anything that re-creates the diff editor silently kills Ctrl+click peek — this is why the
-side-by-side/inline toggle uses `updateOptions` and must keep doing so.
+passed to `createDiffEditor`. The M1 spike proved they do not propagate from the option bag. An
+editor built without them looks completely normal and simply never peeks — no error, nothing wrong
+on screen, the one feature this tool is named after silently gone.
+
+Editors are now created and disposed routinely, as cards scroll in and out of reach, so what keeps
+that safe is that **`createFileDiff` is the only place `createDiffEditor` is called.** Keep it that
+way; the guarantee is structural, not a habit. The side-by-side/inline toggle still goes through
+`updateOptions` (now over `liveEditors`) and must keep doing so, and `viewOptions()` is *also*
+spread into the construction bag — that is what makes a card mounted after a toggle come up in the
+new mode instead of the stored one.
 
 **The four `diffEditor.*Background` colours must be translucent 8-digit hex.** Monaco registers
 them `needsTransparency`; an opaque tint paints over selection and search highlights inside a
@@ -120,7 +154,47 @@ standalone Monaco never registers. Unset, the collapsed-region bars render unsty
 model, so it fires on every transition including `result → undefined` during a `setModel`. The
 readiness check is `getLineChanges() !== null`. Also: cursor move *before* reveal — it is
 `onDidChangeCursorPosition` that expands a collapsed region, so revealing first computes a
-scroll against a layout that is about to move.
+scroll against a layout that is about to move. Measured, not argued: on a collapsed 121-line file
+`getTopForLineNumber` answers with the top of the *fold*, so lines 1 and 2 report identical tops and
+a line-height probe there reads **0**. Measure after the cursor has expanded the region, never
+before.
+
+**`IDiffEditor` has no `onDidContentSizeChange`.** It extends `IEditor`, not `ICodeEditor`
+(`monaco.d.ts:6410`), so a card's auto-height has to subscribe to *both inner* editors — which are
+`ICodeEditor`s and do have it (`monaco.d.ts:6107`) — and take the max of their content heights.
+Side-by-side pads the shorter pane with alignment view zones while inline carries the deletions as
+view zones on the modified side; one of the two is always the full height and neither is always the
+one.
+
+**`getContentHeight()` does account for lines hidden by `hideUnchangedRegions`** — 1037px collapsed
+against 3136px expanded on the same 121-line file — which is what lets it drive a card's box.
+**`scrollBeyondLastLine: false` is not cosmetic there:** 837px of that 3136px was trailing viewport
+padding (856px pane − 19px line height, exactly), so with it on every card would end in a screenful
+of nothing *and* the height sync would recurse, because content height would then depend on viewport
+height.
+
+**What lets the wheel reach the outer scroller is `alwaysConsumeMouseWheel: false`,** not
+`handleMouseWheel: false`. The former defaults to **true**, and on true Monaco swallows a wheel
+event it cannot use rather than letting it bubble. Both are set; only one is the interesting half.
+
+**A card freezes its measured height before disposing its editor, and models are never disposed.**
+That pair is the whole reason scrolling is stable and cheap: the frozen box means nothing below an
+unmounted card moves (measured drift 0px over seven samples; total content height held at 16410px
+across a full round trip), and the surviving models mean coming back costs no request at all
+(`/api/file` calls: 28 before a full descent-and-return, 28 after). Monaco guarantees the second
+half — a model handed over via `setModel` rather than the construction bag survives the editor's
+disposal.
+
+**`revealLineInCenter` is unusable in the band** and `revealLine` is gone with it. A card's editor
+is exactly as tall as its content, so it has no scroll room to move; the *outer* scroller does the
+centring, from `getTopForLineNumber` plus the card's offset. A jump to `LongService.kt:100` puts the
+cursor at 428px of an 856px viewport.
+
+**Lazy mounting is bounded by the viewport, not the selection, and the fixtures cannot show it.**
+`/api/preview` caps commits (`COMMIT_LOG_LIMIT`) and nothing caps files. `feature/wide`'s 12 cards
+are ~3240px of content against a mount window of viewport + 2×1200px ≈ 3256px, so every card
+legitimately stays mounted there and "bounded" is indistinguishable from "broken" — a real 28-file
+selection is what proves it (peak 7 of 28, tracking the viewport up and down).
 
 **`switchRepo` clears the outgoing repo's state BEFORE `adoptRepo`, and the order is the point.**
 `adoptRepo` sets `repo` and calls `renderTrail()` **synchronously**, and `renderTrail` decides
@@ -221,11 +295,12 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   `.git/objects`** and would end the read-only guarantee. Do not reach for it.
 - **A file touched by both a selected and a skipped commit is shown, and marked.**
   `A -> (unselected edit) -> A'` has no two-SHA representation, so those edits are unavoidably in
-  that file's diff. `PreviewFile.skippedShas` names the commits responsible and the sidebar row
-  gets a ⚠ whose tooltip lists them by subject. Hiding the file instead would drop a changed file
-  from a review, which is the same hazard that keeps tree-collapse state out of localStorage.
-  Naming rather than counting is deliberate: a count says something is off without saying what to
-  do about it.
+  that file's diff. `PreviewFile.skippedShas` names the commits responsible and both the sidebar row
+  and the file's own card header get a ⚠ whose tooltip lists them by subject. On the card as well as
+  the row because that is where the reader *is* when they wonder why a diff contains an edit the
+  selection does not explain. Hiding the file instead would drop a changed file from a review, which
+  is the same hazard that keeps tree-collapse state out of localStorage. Naming rather than counting
+  is deliberate: a count says something is off without saying what to do about it.
 - **Live refresh follows the tip only from a selection of ONE that is the tip.** A multi-commit
   selection is a deliberate act, and "the tip moved" says nothing about whether the new commit
   belongs in a set assembled by hand. The single-commit rule is unchanged and has its own
@@ -269,10 +344,31 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   observably, a phantom definition in a file that does not exist at that revision. `resolve()`
   now takes `(repoRoot, revision)` and is a pure function of its arguments. Do not reintroduce a
   "current" anything; if you need coordination, you have taken a wrong turn.
-- **Async entry points claim an epoch.** `shell.ts` and `diff.ts` each have one, and they are not
-  redundant: `openFile` only regains control *after* `createDiff` resolves, by which point
-  `setModel` has already run. A stale call must also stay silent — the epoch holder owns the
-  status line.
+- **Async entry points claim an epoch, and the band needs two levels of it.** `shell.ts` has one
+  for the load chain (repo → branches → commits → preview). `band.ts` has its own, bumped by
+  `render()`, **plus a token per card** bumped whenever that card stops wanting an editor. Both
+  halves are load-bearing: a selection can change while a dozen mounts are in flight, and
+  independently, a single card can be scrolled past while its own mount is still fetching. A mount
+  that resolves against either a stale epoch or a stale token disposes its editor instead of
+  adopting it — an orphan would keep laying itself out. This is where `diff.ts`'s old single
+  `diffEpoch` went; same argument, at the granularity a column of independent editors needs. A stale
+  call must also stay silent — the epoch holder owns the status line.
+- **The sidebar follows the reader, not the other way round.** `activePath` is *reported by* the
+  band from what is at the top of the scroller, via an IntersectionObserver whose negative bottom
+  root margin turns the top 15% of the column into the "being read" zone. That is deliberately the
+  whole mechanism: no scroll listener, no rAF throttle, and no measuring every card every frame,
+  which on a several-hundred-card band is the difference between free and a forced layout per frame.
+  When the zone lands in a gap between cards there is no candidate, and keeping the previous answer
+  is correct — the reader has not moved to another file.
+- **Per-file collapse is in memory only**, for exactly the reason tree-collapse state is: a stale
+  persisted fold can hide a changed file from a review.
+- **A cross-file jump to a file the selection did not change says so.** It has no card, so
+  `revealPath` puts a message in the status line rather than doing nothing. The peek widget has
+  already rendered that definition inline — it builds its own inner editor from the model
+  `defprovider.ts` created — so the reader is not stuck. Worth knowing what the old single-editor
+  view did here before reviving it: it fell back to the selection's span, whose two ends hold
+  identical content for an untouched file, so it navigated to a diff of a file against itself with
+  every line folded away.
 - **Tree collapse state is in memory only.** A stale persisted collapse can hide a changed file
   from a review, which is a correctness hazard. Sidebar width *is* persisted; that is a
   preference, not a view of the data.
