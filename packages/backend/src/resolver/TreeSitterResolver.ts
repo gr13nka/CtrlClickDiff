@@ -14,37 +14,23 @@
 // so two overlapping requests for different revisions cannot be served from
 // each other's index.
 
-import { createRequire } from 'node:module';
-import { existsSync } from 'node:fs';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { Parser, Language, Query, type Node as TSNode, type QueryMatch } from 'web-tree-sitter';
-import type { DefKind, DefLocation, DefQuery, SymbolResolver } from '@ctrlclickdiff/shared';
+import {
+  LANGUAGES,
+  languageForPath,
+  type DefKind,
+  type DefLocation,
+  type DefQuery,
+  type SymbolResolver,
+} from '@ctrlclickdiff/shared';
 import { showFile, listKtFilesAtRev } from '../git';
+import { treeSitterRuntimeWasm, type GrammarAssets } from './grammars';
 
-const require = createRequire(import.meta.url);
-
-/**
- * Resolve the on-disk path to web-tree-sitter's own runtime WASM
- * (`tree-sitter.wasm` — the generic engine, distinct from the Kotlin
- * grammar). Copied verbatim from smoke.ts: under plain Node/tsx (no
- * bundler), `Parser.init()`'s default `locateFile` heuristics don't
- * reliably find this relative to cwd, so we resolve it explicitly via
- * Node's module resolver and hand it back through an explicit `locateFile`
- * override. Falls back gracefully to Parser.init()'s own default behavior
- * if resolution fails.
- */
-function resolveTreeSitterRuntimeWasm(): string | undefined {
-  try {
-    return require.resolve('web-tree-sitter/tree-sitter.wasm');
-  } catch {
-    try {
-      const pkgEntry = require.resolve('web-tree-sitter');
-      const candidate = resolvePath(dirname(pkgEntry), 'tree-sitter.wasm');
-      return existsSync(candidate) ? candidate : undefined;
-    } catch {
-      return undefined;
-    }
-  }
+/** One language's loaded tree-sitter pair. Both are process-lifetime. */
+interface LoadedGrammar {
+  readonly parser: Parser;
+  readonly query: Query;
 }
 
 /** tags.scm marks definitions with captures named `definition.<kind>` — the
@@ -77,31 +63,44 @@ function indexKey(repoRoot: string, revision: string): string {
 }
 
 export class TreeSitterResolver implements SymbolResolver {
-  private parser: Parser | undefined;
-  private query: Query | undefined;
+  private readonly grammars = new Map<string, LoadedGrammar>();
   private readonly indexByRepoRevision = new Map<string, SymbolIndex>();
 
   /**
-   * `Parser.init()` -> `Language.load(wasmPath)` -> `new Query(lang, tagsScmSource)`.
-   * Must be awaited once at boot before buildIndex/resolve are usable.
+   * `Parser.init()`, then one `Language.load` + `new Query` per registered
+   * language. Must be awaited once at boot before resolve is usable.
+   *
+   * Every id in LANGUAGES must have assets here, and a missing one throws at
+   * boot rather than later: without a grammar, resolve() answers `[]`, and an
+   * empty answer is indistinguishable from "no such symbol" by contract — so a
+   * misconfiguration would surface as a feature that silently does nothing.
    */
-  async init(wasmPath: string, tagsScmSource: string): Promise<void> {
-    const runtimeWasm = resolveTreeSitterRuntimeWasm();
+  async init(assets: Readonly<Record<string, GrammarAssets>>): Promise<void> {
+    const runtimeWasm = treeSitterRuntimeWasm();
     await Parser.init(runtimeWasm ? { locateFile: () => runtimeWasm } : undefined);
 
-    const lang = await Language.load(wasmPath);
-    if (!lang) {
-      throw new Error(
-        `TreeSitterResolver.init: Kotlin WASM failed to load from ${wasmPath} ` +
-          '(likely an ABI mismatch — rebuild with tree-sitter-cli ^0.26)',
-      );
+    for (const language of LANGUAGES) {
+      const grammar = assets[language.id];
+      if (!grammar) {
+        throw new Error(`TreeSitterResolver.init: no grammar assets registered for '${language.id}'`);
+      }
+
+      const lang = await Language.load(grammar.wasmPath);
+      if (!lang) {
+        throw new Error(
+          `TreeSitterResolver.init: ${language.id} WASM failed to load from ${grammar.wasmPath} ` +
+            '(likely an ABI mismatch — rebuild with tree-sitter-cli ^0.26)',
+        );
+      }
+
+      const parser = new Parser();
+      parser.setLanguage(lang);
+
+      this.grammars.set(language.id, {
+        parser,
+        query: new Query(lang, await readFile(grammar.tagsScmPath, 'utf8')),
+      });
     }
-
-    const parser = new Parser();
-    parser.setLanguage(lang);
-
-    this.parser = parser;
-    this.query = new Query(lang, tagsScmSource);
   }
 
   /**
@@ -114,23 +113,22 @@ export class TreeSitterResolver implements SymbolResolver {
   async buildIndex(repoRoot: string, revision: string): Promise<void> {
     const key = indexKey(repoRoot, revision);
     if (this.indexByRepoRevision.has(key)) return;
-    if (!this.parser || !this.query) {
-      throw new Error('TreeSitterResolver.buildIndex: called before init()');
-    }
-    const parser = this.parser;
-    const query = this.query;
 
     const paths = await listKtFilesAtRev(repoRoot, revision);
     const index: SymbolIndex = new Map();
 
     for (const path of paths) {
+      const language = languageForPath(path);
+      const grammar = language && this.grammars.get(language.id);
+      if (!grammar) continue;
+
       const source = await showFile(repoRoot, revision, path);
       if (!source) continue; // deleted/empty at this rev
 
-      const tree = parser.parse(source);
+      const tree = grammar.parser.parse(source);
       if (!tree) continue;
 
-      for (const match of query.matches(tree.rootNode)) {
+      for (const match of grammar.query.matches(tree.rootNode)) {
         const def = toDefMatch(match, path);
         if (!def) continue;
         const existing = index.get(def.name);

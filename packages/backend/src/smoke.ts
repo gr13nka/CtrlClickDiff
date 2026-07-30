@@ -12,62 +12,22 @@
 // success, 1 on any failure (missing prerequisite files, ABI mismatch, or a
 // captures mismatch).
 
-import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { dirname, resolve as resolvePath } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 // web-tree-sitter 0.26.x API: named imports, not the old `Parser.Language.load`.
 import { Parser, Language, Query } from 'web-tree-sitter';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
+import { GRAMMARS, treeSitterRuntimeWasm } from './resolver/grammars';
 
-// Repo layout is packages/backend/src/smoke.ts, so the repo root is three
-// directories up. Computing these from import.meta.url (rather than
-// hardcoding an absolute path) keeps the script correct regardless of where
-// the repo is checked out, while still resolving to the exact locations the
-// plan specifies:
-//   vendor/tree-sitter-kotlin.wasm
-//   packages/backend/src/resolver/tags.scm
-const REPO_ROOT = resolvePath(here, '../../..');
-const KOTLIN_WASM_PATH = resolvePath(REPO_ROOT, 'vendor/tree-sitter-kotlin.wasm');
-const TAGS_SCM_PATH = resolvePath(here, 'resolver/tags.scm');
-
-/**
- * Resolve the on-disk path to web-tree-sitter's own runtime WASM
- * (`tree-sitter.wasm` — the generic engine, distinct from the Kotlin
- * grammar). Under plain Node/tsx (no bundler), `Parser.init()`'s default
- * `locateFile` heuristics don't reliably find this relative to cwd, so we
- * resolve it explicitly via Node's module resolver and hand it back through
- * an explicit `locateFile` override. Falls back gracefully — if resolution
- * fails we let `Parser.init()` try its own default behavior rather than
- * hard-failing here (the real failure signal is the Kotlin language load
- * below).
- */
-function resolveTreeSitterRuntimeWasm(): string | undefined {
-  try {
-    // Subpath export — works if web-tree-sitter's package.json "exports"
-    // exposes the .wasm file directly.
-    return require.resolve('web-tree-sitter/tree-sitter.wasm');
-  } catch {
-    try {
-      // Fall back: find the package's main entry and assume the runtime
-      // wasm sits alongside it (true for web-tree-sitter's published layout).
-      const pkgEntry = require.resolve('web-tree-sitter');
-      const candidate = resolvePath(dirname(pkgEntry), 'tree-sitter.wasm');
-      return existsSync(candidate) ? candidate : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-}
+// The same asset paths the server boots with, from the same table — this test
+// is worthless if it can pass against a grammar the server does not load.
+const { wasmPath: KOTLIN_WASM_PATH, tagsScmPath: TAGS_SCM_PATH } = GRAMMARS.kotlin;
 
 async function main(): Promise<void> {
   console.log('[smoke] initializing web-tree-sitter runtime...');
 
-  const runtimeWasm = resolveTreeSitterRuntimeWasm();
+  const runtimeWasm = treeSitterRuntimeWasm();
   if (runtimeWasm) {
     console.log(`[smoke] resolved tree-sitter.wasm runtime at: ${runtimeWasm}`);
   } else {

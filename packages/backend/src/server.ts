@@ -11,9 +11,6 @@
 // proxy /api -> http://127.0.0.1:5178 (see packages/frontend/vite.config.ts)
 // while leaving room for non-API routes (e.g. serving the built frontend) later.
 
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve as resolvePath } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import type {
   BranchInfo,
@@ -28,13 +25,9 @@ import { BrowsePathError, browseDirectory } from './browse';
 import { COMMIT_LOG_LIMIT, listBranches, showFile, listCommits } from './git';
 import { buildPreview } from './preview';
 import { InvalidRepoPathError, RepoRegistry, resolveBrowseRoot } from './repos';
+import { GRAMMARS } from './resolver/grammars';
 import { TreeSitterResolver } from './resolver/TreeSitterResolver';
 import { subscribe } from './watch';
-
-const here = dirname(fileURLToPath(import.meta.url));
-// Same fixed locations as smoke.ts's REPO_ROOT-relative resolution.
-const KOTLIN_WASM_PATH = resolvePath(here, '../../../vendor/tree-sitter-kotlin.wasm');
-const TAGS_SCM_PATH = resolvePath(here, 'resolver/tags.scm');
 
 const app = Fastify({
   logger: true,
@@ -490,10 +483,9 @@ try {
     app.log.info('REPO_ROOT unset — no default repo; register one via POST /api/repos');
   }
 
-  // init() loads the Kotlin WASM grammar + compiles tags.scm once; must
+  // init() loads every registered grammar + compiles its tags query once; must
   // finish before any /api/def or /api/index request can be served.
-  const tagsScmSource = await readFile(TAGS_SCM_PATH, 'utf8');
-  await resolver.init(KOTLIN_WASM_PATH, tagsScmSource);
+  await resolver.init(GRAMMARS);
   app.log.info('TreeSitterResolver initialized');
 
   const address = await app.listen({ port, host });

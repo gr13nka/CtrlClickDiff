@@ -10,7 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { BranchInfo, ChangedFile, CommitInfo } from '@ctrlclickdiff/shared';
+import { isSourcePath, type BranchInfo, type ChangedFile, type CommitInfo } from '@ctrlclickdiff/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -306,8 +306,8 @@ export async function commitSpan(
 }
 
 /**
- * One `<status>\t<path>` row, or null when it is not a `.kt` file this contract
- * can describe.
+ * One `<status>\t<path>` row, or null when it is not a source file this
+ * contract can describe.
  *
  * Rename/copy statuses (R100, C100, ...) are dropped rather than mapped: the
  * wire contract's FileStatus is 'A' | 'M' | 'D' only, and `--no-renames` on the
@@ -322,7 +322,7 @@ function parseNameStatus(line: string): ChangedFile | null {
   const status = statusField?.[0];
   if (status !== 'A' && status !== 'M' && status !== 'D') return null;
   const path = pathParts[pathParts.length - 1];
-  if (!path || !path.endsWith('.kt')) return null;
+  if (!path || !isSourcePath(path)) return null;
   return { path, status };
 }
 
