@@ -19,11 +19,12 @@ packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (wha
                     resolver/TreeSitterResolver.ts (tree-sitter symbol index)
 packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
                     diff.ts (one file's editor) defprovider.ts api.ts
+                    peekscope.ts (the review, as seen by peek's candidate list)
                     topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
                     filetree.ts repopicker.ts live.ts theme.ts
                     modal.ts (backdrop/aria/Escape for all three dialogs)
                     storage.ts (the one guarded localStorage) resizer.ts (the sidebar seam)
-                    ALL CSS is inline in index.html
+                    ALL CSS is inline in index.html — except peekscope.ts's, and see below
 vendor/             prebuilt tree-sitter-kotlin.wasm (no upstream prebuild exists)
 fixtures/           make-sample-repo.sh — generates the two test repos
 docs/               README screenshots + capture-screenshots.mjs, which regenerates them
@@ -59,6 +60,13 @@ pnpm smoke                          # asserts the Kotlin WASM loads with a match
 bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
 node docs/capture-screenshots.mjs   # regenerates the README screenshots (app must be running)
 ```
+
+The fixtures carry cases that only exist to be verified, and deleting one silently removes the
+only way to see a behaviour fail. Repo B's **`feature/scoped-defs`** is the newest: `render` is
+declared in both `near/Label.kt` and `far/Label.kt` and called from `near/Caller.kt`, arranged so
+that selecting only its second commit leaves the *nearer* of the two definitions outside the
+review — which is the one Monaco's peek prefers on its own. Nothing else in either repo can show
+Ctrl+click choosing between an in-review and an out-of-review candidate.
 
 `docs/capture-screenshots.mjs` is a worked example of everything in the two paragraphs below —
 it drives the repo picker, both palettes and a real Ctrl+click peek, and asserts on
@@ -213,6 +221,42 @@ them (the parse used to sit in `defprovider.ts`) makes the segment layout a two-
 half-done version fails **silently at runtime** — cross-file peek just stops rendering — and
 never at typecheck. Same reasoning as `initResizer` reading its clamp bounds back from CSS
 instead of retyping them.
+
+**Peek chooses its own first candidate, and it is not the one the provider returned first.**
+`provideDefinition`'s array is re-sorted by URI (`referencesModel.js:120`), so the list is
+alphabetical by path; the candidate the widget *opens on* is `nearestReference` — longest common
+URI prefix with the clicked file, i.e. directory proximity (`referencesController.js:152`, reached
+because Ctrl+click builds `DefinitionAction` with `openInPeek: true`,
+`goToDefinitionAtPosition.js:246`). Our order still decides `firstReference()`
+(`goToCommands.js:143`), which is the *jump* a Ctrl+click inside the peek preview takes — so the
+in-review-first partition in `defprovider.ts` is not decoration, it just does not do what a reader
+assumes. Do not try to fix the peek's choice by reordering there; it has no effect at all.
+The lever that would work, `definitionLinkOpensInPeek: false` + `gotoAndPeek`, jumps the band to
+the target file *before* peeking, which loses the reader's place. `peekscope.ts` nudges the
+selection instead.
+
+**A peek row's path is in `aria-label`, not `title`, and one candidate file means no file rows.**
+The rows are `IconLabel`s with `custom-hover="true"`, so the native title the label API implies is
+never written; `aria-label` holds exactly `uri.fsPath`, which is what `peekscope.ts`'s generated
+CSS keys on (asked of `monaco.Uri`, never assembled by hand). With a single candidate file the
+tree's input is that group (`referencesWidget.js:451`) and the list is bare reference rows — there
+is nothing to mark, which is also why `docs/screenshot-peek.png` (a `shout` peek, one file) is
+unaffected by any of this. Marking is CSS rather than classes set from an observer because
+`monaco-list` recycles rows: a class outlives the file it was set for, an attribute selector
+cannot. That generated stylesheet is the one exception to "ALL CSS is inline in index.html" —
+the selectors are built per gesture from paths only that module knows, so the alternative is one
+decision split across two files. It still uses index.html's `--ccd-*` tokens.
+
+**Nudging peek's selection is two clicks, and the second needs the frame after the first.**
+Monaco expands only the group it revealed into, so the target's reference row does not exist yet:
+clicking the file row creates it, and only a click on a *reference* row moves the preview (a file
+row is ignored — `referencesWidget.js:360-378`; a single click is `show`, which the controller
+does not act on, so nothing navigates or closes). The expand is a tree re-render, not a
+synchronous insert — reading the rows back in the same turn finds the list unchanged, which is how
+the first version of this selected the right file row, clicked nothing, and left the preview where
+it was. And the nudge waits three frames after `.selected` appears: acting the moment it does cuts
+across the reveal Monaco still has in flight, which surfaced as an unhandled `Canceled: Canceled`
+in the console. All three were found by measuring, in that order.
 
 **`COMMIT_LOG_LIMIT` is exported from `git.ts` and is the selection cap too.** A selection is
 assembled out of commits the picker listed, so the log's page size *is* the ceiling
@@ -372,6 +416,19 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
 - **Tree collapse state is in memory only.** A stale persisted collapse can hide a changed file
   from a review, which is a correctness hazard. Sidebar width *is* persisted; that is a
   preference, not a view of the data.
+- **An out-of-review peek row is greyed, not labelled, and that was measured rather than chosen.**
+  A "· not in this commit" suffix was written and taken out: the peek's tree pane is ~150px, a
+  filename needs ~52px and the note ~95px, so the two cannot both render. Pinning the note clipped
+  the *filename* to "L…" — a row that no longer says which file it is has given up its whole job —
+  and leaving it unpinned ellipsized the note itself to "· not in this…", which reads as broken.
+  Dimming plus italic says the same thing in no space at all. If the grey ever needs words, the
+  place with room is the peek's title bar, not the row.
+- **The review scope reaches Ctrl+click through one predicate, `shell.isInReview`.** The band uses
+  it to decide a path has no card and `defprovider.ts` uses it to split the candidate list; they
+  are the same question and must never answer differently. It is passed into
+  `registerKotlinDefinitions` rather than imported, so that file keeps having no ambient state of
+  its own — a resolution belongs to the model it started from, the review it is judged against
+  belongs to the shell.
 - **Light mode is out of scope**, and `api.prewarm` was deleted rather than revived. Auto-prewarm
   on commit select stays disabled — see the comment in `selectCommit`; on a large repo behind a
   blobless partial clone it triggers thousands of on-demand blob fetches.
