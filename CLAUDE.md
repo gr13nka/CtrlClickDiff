@@ -76,9 +76,22 @@ node docs/capture-screenshots.mjs   # regenerates the README screenshots (app mu
 | RSS after one revision | +353 MB | +32 MB | |
 | RSS after a second revision | +319 MB | **+0 MB** | |
 
-End-to-end in a browser (mousePressed → `.zone-widget`) that is **55 ms**. The warm column is the
-one trade: it used to be 0.001 s off a resident index, and the grep now runs every time. 30 ms is
-imperceptible in a gesture and it is what buys the bounded memory.
+End-to-end in a browser (mousePressed → `.zone-widget`) that is **51–100 ms**, including a
+45-definition peek. The warm column is the one trade: it used to be 0.001 s off a resident index,
+and the grep now runs every time. 30 ms is imperceptible in a gesture and it is what buys the
+bounded memory.
+
+**The per-resolve log is the first thing to look at when a click feels slow**, and it is why the
+license-header case was found at all:
+
+```
+[resolver] render in 89ms (grep 42ms -> 51 candidates, 44 cached, parse 47ms) -> 45 hits
+```
+
+A high candidate count means the identifier really is everywhere (check the line filter above); a
+high `cached` next to a high parse time means the cache is thrashing and `FILE_SYMBOL_LIMIT` is
+below the candidate set; a grep far above a few tens of ms on a partial clone means a lazy blob
+fetch, i.e. the network rather than this code.
 
 The fixtures carry cases that only exist to be verified, and deleting one silently removes the
 only way to see a behaviour fail. Repo B's **`feature/scoped-defs`** is the newest: `render` is
@@ -338,18 +351,34 @@ identifier is escaped before it goes in. And output records are `<rev>:<path>`, 
 avoids having to de-quote `core.quotePath` escaping, and `--full-name` is what stops
 "`repoRoot` is the toplevel" from being load-bearing.
 
-**Candidate discovery ignores `import`/`package` lines, and that is a filter, not a heuristic.**
-Without it a *package segment* costs a whole-repo parse: `letsPlot` matched 2274 of lets-plot's
-2646 files and took 6.70 s — every time, because 2274 candidates against a 2000-entry cache meant
-each pass evicted its own earlier files. Package lines sit at the top of every file, so a reader
-with Ctrl held drags the pointer straight through them. With the keywords excluded it is 57 files
-and 0.23 s. Nothing can be lost, because a declaration cannot appear on an `import` or `package`
-line — verified rather than argued: across six identifiers, 8648 files were dropped and **every**
-line mentioning the name in them was an import or package line, 0 exceptions. An extension
-function (`fun Foo.bar()`) is on a `fun` line and survives; `import a.b.C as render` is an alias,
-not a declaration, and is correctly gone. The keywords are per language
-(`Language.nonDeclaringLineKeywords`); needing the leading negative lookahead is why the grep is
-`-P` and the name is escaped.
+**Candidate discovery ignores `import`, `package`, `//` and `*` lines, and those are filters, not
+heuristics.** Boilerplate at the top of every file otherwise makes ordinary words cost a whole-repo
+parse, and Kotlin has two kinds of it. The *package line*: `letsPlot` matched 2274 of lets-plot's
+2646 files, 6.70 s. The *license header comment*, which every file in that repo carries: its words —
+`Copyright`, `license`, `source`, `code`, `found`, `file`, `this`, `that` — matched ~2571 files
+**each**, 9.4–15.0 s. Both were also thrashing the cache (2000-entry cap against 2500+ candidates
+means a query evicts its own earlier files, so repeats never got cheaper — the per-resolve log shows
+this as a high `cached` count next to a high parse time). Package lines and license headers both sit
+at the top of every file, which is exactly where a reader with Ctrl held drags the pointer.
+
+Measured, with both excluded: `Copyright` 10.1 s → 0.040 s, `license` → 0.036 s, `file` 15.0 s →
+0.204 s, `source` → 0.203 s, `code` → 0.077 s. Real identifiers barely move — `render` 57 → 51
+candidate files, `apply` 348 → 335, `size` 696 → 662 — which is the point: this removes noise, not
+signal, and their hit counts are unchanged.
+
+Nothing can be lost, because a declaration cannot appear on an `import`/`package` line nor on one
+whose first non-space characters are `//` or `*`. Verified rather than argued: across eleven
+identifiers, 15025 files were dropped and **every** line mentioning the name in them was a comment,
+import or package line — 0 exceptions. An extension function (`fun Foo.bar()`) is on a `fun` line
+and survives; `import a.b.C as render` is an alias, not a declaration, and is correctly gone.
+
+**`/*` is deliberately not in the list, only `*`.** A line that opens a block comment can legally
+also close it and then declare something (`/* note */ fun foo()`), so excluding it would stop being
+a filter; a line *starting* with `*` is a continuation or terminator and cannot be anything else.
+The prefixes are per language (`Language.nonDeclaringLinePrefixes`), `\b` is appended only to those
+ending in a word character (after `//` it would demand a word boundary between two non-word
+characters and never match), and needing the leading negative lookahead is why the grep is `-P` and
+the name is escaped.
 
 **Delete every tree-sitter tree, and let nothing derived from one outlive it.** Trees are WASM
 pointers and are **not** garbage collected; the old whole-revision index leaked one per file per
