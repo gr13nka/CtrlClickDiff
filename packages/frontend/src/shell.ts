@@ -760,14 +760,12 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
   activePath = '';
   renderTrail();
 
-  // Auto-prewarm is intentionally disabled: on large repos (e.g. Lets-Plot,
-  // ~2700 .kt files) eagerly indexing the whole revision on every commit
-  // select is expensive — and against a blobless partial clone it would
-  // trigger thousands of on-demand blob fetches. The resolver still builds
-  // its index lazily on the first Ctrl+click (/api/def) and caches it per
-  // revision. For small repos, re-enable with a fire-and-forget
-  // POST /api/index?rev=<headSha>&repo=<id> — the api.prewarm() wrapper that
-  // used to sit here went with the call it existed for.
+  // There is deliberately nothing to prewarm here. This used to explain why an
+  // eager POST /api/index was disabled — indexing a whole revision on every
+  // commit select cost ~11.5s on Lets-Plot and, on a blobless partial clone,
+  // thousands of on-demand blob fetches. That route is gone: the resolver now
+  // greps for the identifier and parses only the files that mention it, so the
+  // cost it was hiding from is no longer there to hide from.
 
   renderFileList(files);
 

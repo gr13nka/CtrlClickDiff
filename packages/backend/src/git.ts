@@ -327,13 +327,68 @@ function parseNameStatus(line: string): ChangedFile | null {
 }
 
 /**
- * `git ls-tree -r --name-only <rev>`, filtered to `.kt` paths — the file
- * list `TreeSitterResolver.buildIndex` parses to build a revision's symbol
- * index (Milestone 3).
+ * Repo-relative paths of the files at `rev` that contain `name` as a whole
+ * word, restricted to files ending in one of `extensions`. Sorted, each path
+ * once.
+ *
+ * This is candidate *discovery*, not resolution: git matches the identifier
+ * anywhere in the file, call sites included, so the caller still parses each
+ * hit to find out whether it declares anything. What it buys is that the caller
+ * parses seven files instead of 2646 — on lets-plot this call is ~20ms and
+ * replaces a whole-revision index that cost 11.5s.
+ *
+ * Five flags here are load-bearing and were each verified on git 2.43:
+ *
+ *  - `-F` makes the pattern literal. Without it `-e` is a *regex*, and
+ *    `Plot.vgExport` matches `PlotSvgExport` — an identifier is not a pattern.
+ *  - `-w` bounds it to whole words, so `render` does not match `renderAll`.
+ *  - `-z` makes records NUL-separated. Without it git quote-escapes unusual
+ *    paths per `core.quotePath` and this would need a de-quoter.
+ *  - `--full-name` reports paths from the toplevel. `repoRoot` *is* the
+ *    toplevel today; this flag is what stops that from being load-bearing.
+ *  - `-e` binds the pattern, which is also what makes an identifier beginning
+ *    with `-` inert rather than an option (verified with `-e --untracked`).
+ *
+ * There is deliberately no `--end-of-options`: `git grep` does not accept it and
+ * tries to resolve it as a revision. `rev` is whitelisted at the route instead —
+ * see REV_PATTERN in server.ts.
+ *
+ * `-I` is deliberately NOT passed. It would skip a source file git classifies as
+ * binary, and this repo has produced binary-classified text files before (see
+ * CLAUDE.md's control-byte rule). Silently losing a definition is the wrong
+ * failure for a review tool.
  */
-export async function listKtFilesAtRev(repoRoot: string, rev: string): Promise<string[]> {
-  const stdout = await run(repoRoot, ['ls-tree', '-r', '--name-only', rev]);
-  return stdout.split('\n').filter((path) => path.endsWith('.kt'));
+export async function candidateFiles(
+  repoRoot: string,
+  rev: string,
+  name: string,
+  extensions: readonly string[],
+): Promise<string[]> {
+  const pathspecs = extensions.map((ext) => `*${ext}`);
+
+  let stdout: string;
+  try {
+    stdout = await run(repoRoot, [
+      'grep', '-z', '--full-name', '-F', '-w', '-l', '-e', name, rev, '--', ...pathspecs,
+    ]);
+  } catch (err) {
+    // `git grep` exits 1 for "no match", and no-match is the COMMON case here —
+    // any word the reader Ctrl+hovers that is not a symbol. run() rejects on a
+    // non-zero exit, so this has to be caught by code rather than left to the
+    // generic path. Exit 128 (bad rev, broken object) is a real failure and must
+    // still throw.
+    if ((err as { code?: unknown }).code === 1) return [];
+    throw err;
+  }
+
+  // Each record is `<rev>:<path>`. The rev is what we passed, so its length is
+  // how the prefix comes off — a path may itself contain ':'.
+  const prefix = rev.length + 1;
+  return stdout
+    .split('\x00')
+    .filter(Boolean)
+    .map((record) => record.slice(prefix))
+    .sort();
 }
 
 /**

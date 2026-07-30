@@ -45,38 +45,43 @@ export interface DefLocation {
 /**
  * Resolves identifiers to their definitions at one revision of one repository.
  *
- * Both methods take the (repoRoot, revision) pair explicitly and an
+ * ONE method, and that is this contract's main claim: asking is the whole
+ * interface. There used to be a `buildIndex(repoRoot, revision)` beside
+ * `resolve`, whose only documented rule was that callers await it first — a
+ * step that existed to be awaited. It was there because the tree-sitter
+ * implementation could not answer without first parsing every file at the
+ * revision, and that is a fact about that implementation, not about the
+ * question. It cost a 2646-file repository 11.5s and ~320MB per revision to
+ * answer about one identifier. An implementation that needs preparatory work
+ * now does it inside `resolve`, at the scale the query actually needs.
+ *
+ * `resolve` takes the (repoRoot, revision) pair explicitly and an
  * implementation must not keep a "current" one. That is not stylistic: a
  * resolver that remembered the last revision answered two concurrent /api/def
  * calls from each other's index, and the observable result was a definition
  * reported in a file that does not exist at the revision asked about.
  *
- * An implementation may need construction work of its own — loading a grammar,
- * starting a language server — before either method can be called. That step
- * is deliberately NOT on this interface, because what it needs differs per
- * implementation (a WASM path and a query file for tree-sitter; a binary and a
- * workspace root for a language server) and putting one implementation's setup
- * here would make every other implementation satisfy it. server.ts performs it
- * once at boot, before it starts listening.
+ * An implementation may still need construction work of its own — loading a
+ * grammar, starting a language server — before `resolve` can be called. That
+ * step is deliberately NOT on this interface, because what it needs differs per
+ * implementation (grammar WASM plus a tags query for tree-sitter; a binary and
+ * a workspace root for a language server) and putting one implementation's
+ * setup here would make every other implementation satisfy it. server.ts
+ * performs it once at boot, before it starts listening.
  */
 export interface SymbolResolver {
   /**
-   * Indexes `revision` of `repoRoot`, if it has not been indexed already.
-   *
-   * Idempotent per pair, and cheap on the second call — callers are expected to
-   * await it before every `resolve` rather than track what has been built.
-   */
-  buildIndex(repoRoot: string, revision: string): Promise<void>;
-
-  /**
    * Definitions matching `query` at that pair, best first: hits in
-   * `query.file` rank ahead of hits elsewhere, stable within each group, so a
-   * jump near a locally-shadowing definition finds the local one.
+   * `query.file` rank ahead of hits elsewhere, and the rest are in a fixed
+   * order that does not depend on scheduling — so a jump near a locally-
+   * shadowing definition finds the local one.
+   *
+   * The language is taken from `query.file`; see that field. A path no
+   * registered language claims answers empty rather than guessing.
    *
    * An empty array means "no answer" and deliberately does NOT distinguish
-   * between "no such symbol" and "that pair was never indexed" — callers cannot
-   * tell the two apart and must not try to. Awaiting `buildIndex` for the same
-   * pair first is what makes the distinction unnecessary.
+   * between "no such symbol" and "nothing here could have answered" — callers
+   * cannot tell the two apart and must not try to.
    */
   resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]>;
 }

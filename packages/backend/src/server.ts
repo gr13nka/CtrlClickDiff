@@ -2,7 +2,7 @@
 //
 // Milestone 2: replaces the M0 placeholder with the real git-backed endpoints
 // (`/api/commits`, `/api/commit/:sha/files`, `/api/file`). Milestone 3 adds
-// `/api/def` + `/api/index` backed by `TreeSitterResolver`.
+// `/api/def`, backed by `TreeSitterResolver`.
 //
 // This backend serves any git repository registered through `/api/repos`, which
 // only accepts repositories under the browse root (see repos.ts). REPO_ROOT is
@@ -345,9 +345,10 @@ app.get<{ Querystring: { rev: string; path: string; repo?: string } }>(
 // because a definition is resolved within the language of the file it was asked
 // from. A client-declared language could disagree with the file it names.
 //
-// buildIndex is cached per-rev (no-op + no re-parse if `rev` was already
-// indexed by a prior /api/def or /api/index call), so this is cheap on the
-// second-and-later Ctrl+click for a given commit.
+// The resolver scopes its work to the identifier — it greps for candidate files
+// and parses only those — so there is nothing to prewarm and no first-call
+// penalty to amortize. Repeat clicks are cheap because the files it did parse
+// stay in its bounded per-file cache.
 app.get<{
   Querystring: { name: string; file: string; line: number; rev: string; repo?: string };
 }>(
@@ -376,37 +377,7 @@ app.get<{
       reply.code(root.status);
       return root.body;
     }
-    await resolver.buildIndex(root.root, rev);
     return resolver.resolve(root.root, rev, { name, file, line });
-  },
-);
-
-// POST /api/index?rev=<sha> -> { ok, count } — prewarm the index for a
-// revision ahead of time (used by the M4 shell on commit-select) so the
-// first /api/def for that rev doesn't pay the parse cost inline.
-app.post<{ Querystring: { rev: string; repo?: string } }>(
-  '/api/index',
-  {
-    schema: {
-      querystring: {
-        type: 'object',
-        required: ['rev'],
-        properties: {
-          rev: { type: 'string', minLength: 1 },
-          ...REPO_QUERY_PROPERTY,
-        },
-      },
-    },
-  },
-  async (request, reply): Promise<{ ok: true; count: number } | { error: string }> => {
-    const { rev } = request.query;
-    const root = repoRootFor(request.query.repo);
-    if (!root.ok) {
-      reply.code(root.status);
-      return root.body;
-    }
-    await resolver.buildIndex(root.root, rev);
-    return { ok: true, count: resolver.indexedCount(root.root, rev) };
   },
 );
 
@@ -510,7 +481,7 @@ try {
   }
 
   // init() loads every registered grammar + compiles its tags query once; must
-  // finish before any /api/def or /api/index request can be served.
+  // finish before any /api/def request can be served.
   await resolver.init(GRAMMARS);
   app.log.info('TreeSitterResolver initialized');
 
