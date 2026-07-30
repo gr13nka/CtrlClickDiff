@@ -163,7 +163,9 @@ export class TreeSitterResolver implements SymbolResolver {
     const grammar = language && this.grammars.get(language.id);
     if (!language || !grammar) return [];
 
-    const candidates = await candidateFiles(repoRoot, revision, query.name, language.extensions);
+    const candidates = await candidateFiles(
+      repoRoot, revision, query.name, language.extensions, language.nonDeclaringLineKeywords,
+    );
 
     // Partitioned BEFORE the reads, not after. The read pool finishes out of
     // order, so ordering the *results* would make the answer depend on

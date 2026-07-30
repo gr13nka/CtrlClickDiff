@@ -29,10 +29,30 @@ export interface Language {
   readonly id: string;
   /** Extensions this language claims, leading dot included, matched as a path suffix. */
   readonly extensions: readonly string[];
+  /**
+   * Keywords that begin a line which can NEVER declare anything.
+   *
+   * Candidate discovery greps for an identifier and parses every file that
+   * mentions it, so a name appearing in boilerplate at the top of every file
+   * costs a whole-repo parse. In Kotlin `letsPlot` is a *package segment*:
+   * `git grep -w letsPlot` matches 2274 of lets-plot's 2646 files and a
+   * Ctrl+hover over any package line cost 6.7s. Ignoring lines that start with
+   * these keywords takes it to 57 files and ~0.2s, and it also cuts the ordinary
+   * ambiguous case (`render`, 264 -> 60).
+   *
+   * This is a filter, not a heuristic, and the difference matters: a
+   * declaration cannot appear on an `import` or `package` line, so nothing that
+   * tags.scm would have captured can be excluded by it. An extension function
+   * (`fun Foo.bar()`) is on a `fun` line and survives; `import a.b.C as render`
+   * is an alias rather than a declaration and is correctly dropped.
+   */
+  readonly nonDeclaringLineKeywords: readonly string[];
 }
 
 /** Every language this tool reviews. One entry, on purpose — see the file header. */
-export const LANGUAGES: readonly Language[] = [{ id: 'kotlin', extensions: ['.kt'] }];
+export const LANGUAGES: readonly Language[] = [
+  { id: 'kotlin', extensions: ['.kt'], nonDeclaringLineKeywords: ['import', 'package'] },
+];
 
 /** Every extension any registered language claims, in registry order. */
 export const SOURCE_EXTENSIONS: readonly string[] = LANGUAGES.flatMap((lang) => lang.extensions);

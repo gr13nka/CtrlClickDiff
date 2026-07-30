@@ -326,22 +326,37 @@ function parseNameStatus(line: string): ChangedFile | null {
   return { path, status };
 }
 
+/** Escapes a literal for embedding in a PCRE — `name` reaches git as a regex. */
+function escapeRegex(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+}
+
 /**
- * Repo-relative paths of the files at `rev` that contain `name` as a whole
- * word, restricted to files ending in one of `extensions`. Sorted, each path
- * once.
+ * Repo-relative paths of the files at `rev` that mention `name` as a whole word
+ * on a line that could declare something, restricted to files ending in one of
+ * `extensions`. Sorted, each path once.
  *
  * This is candidate *discovery*, not resolution: git matches the identifier
- * anywhere in the file, call sites included, so the caller still parses each
+ * anywhere on such a line, call sites included, so the caller still parses each
  * hit to find out whether it declares anything. What it buys is that the caller
- * parses seven files instead of 2646 — on lets-plot this call is ~20ms and
+ * parses seven files instead of 2646 — on lets-plot this call is ~30ms and
  * replaces a whole-revision index that cost 11.5s.
  *
- * Five flags here are load-bearing and were each verified on git 2.43:
+ * `ignoreLineKeywords` is what keeps that true for boilerplate identifiers.
+ * A name that appears at the top of every file — a package segment — otherwise
+ * costs a whole-repo parse: `letsPlot` matched 2274 of 2646 files and took 6.7s.
+ * Excluding lines that begin with these keywords takes it to 57 files. It is a
+ * filter rather than a heuristic: a declaration cannot live on an `import` or
+ * `package` line, so nothing a tags query would capture can be lost. See
+ * Language.nonDeclaringLineKeywords for the full argument.
  *
- *  - `-F` makes the pattern literal. Without it `-e` is a *regex*, and
- *    `Plot.vgExport` matches `PlotSvgExport` — an identifier is not a pattern.
- *  - `-w` bounds it to whole words, so `render` does not match `renderAll`.
+ * The flags are load-bearing and were each verified on git 2.43:
+ *
+ *  - `-P` selects PCRE, which is what makes the leading negative lookahead
+ *    possible. It also means `name` is a REGEX, not a literal — hence
+ *    escapeRegex, and hence `\b...\b` doing the job `-w` used to. Without
+ *    escaping, `Plot.vgExport` would match `PlotSvgExport`.
+ *  - `\b` bounds it to whole words, so `render` does not match `renderAll`.
  *  - `-z` makes records NUL-separated. Without it git quote-escapes unusual
  *    paths per `core.quotePath` and this would need a de-quoter.
  *  - `--full-name` reports paths from the toplevel. `repoRoot` *is* the
@@ -363,13 +378,20 @@ export async function candidateFiles(
   rev: string,
   name: string,
   extensions: readonly string[],
+  ignoreLineKeywords: readonly string[] = [],
 ): Promise<string[]> {
   const pathspecs = extensions.map((ext) => `*${ext}`);
+  const word = `\\b${escapeRegex(name)}\\b`;
+  // Anchored at the line start so it rejects the LINE, not the match: a line
+  // beginning with one of these keywords is skipped however the name appears on it.
+  const pattern = ignoreLineKeywords.length
+    ? `^(?!\\s*(?:${ignoreLineKeywords.map(escapeRegex).join('|')})\\b).*${word}`
+    : word;
 
   let stdout: string;
   try {
     stdout = await run(repoRoot, [
-      'grep', '-z', '--full-name', '-F', '-w', '-l', '-e', name, rev, '--', ...pathspecs,
+      'grep', '-z', '--full-name', '-P', '-l', '-e', pattern, rev, '--', ...pathspecs,
     ]);
   } catch (err) {
     // `git grep` exits 1 for "no match", and no-match is the COMMON case here —
