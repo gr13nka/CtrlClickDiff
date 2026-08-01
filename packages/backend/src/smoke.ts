@@ -114,6 +114,10 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'class Shape { int area() const; }; using Number = int; int Shape::area() const { return 0; }',
     expectedNames: ['Shape', 'area', 'Number'],
   },
+  csharp: {
+    sample: 'class Foo { public int Bar { get; set; } public void Baz() {} } interface IQux { }',
+    expectedNames: ['Foo', 'Bar', 'Baz', 'IQux'],
+  },
 };
 
 async function main(): Promise<void> {

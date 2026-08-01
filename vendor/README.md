@@ -240,3 +240,33 @@ build next time.
   `.h` is claimed by the `cpp` registry entry in
   `packages/shared/src/languages.ts`, not a separate `c` entry -- see that
   file's comment.
+
+### tree-sitter-csharp.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-c-sharp
+- **Pinned commit:** `9150f7d56bb47f1a809fa23623f1ba1413e93fa9` (HEAD, resolved
+  via `git ls-remote`)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 5,867,141 bytes (~5.6 MiB)
+- **sha256:** `2cfe7954ea09e099164e49d7293c33aeb5a133e54be7eada8b066aba0ef7a79a`
+- **Notes:** the upstream repo's grammar self-identifies as `c_sharp` (its
+  `grammar.js` name, its `tree-sitter.json` name, and the artifact
+  `tree-sitter-cli build --wasm` emits by default) — `csharp` is Monaco's
+  language id, used everywhere in this repo (registry key, grammar-asset
+  key, `vendor/tree-sitter-csharp.wasm`) instead; `build-grammars.sh`'s copy
+  step (`cp "$out_wasm" ".../tree-sitter-${key}.wasm"`) is what performs
+  that rename, so nothing downstream of the build script ever sees the
+  underscore spelling. The upstream repo ships a committed `src/parser.c`
+  that built cleanly with `tree-sitter-cli@0.26.10 build --wasm` directly --
+  no `generate` regeneration step was needed.
+  `packages/backend/src/resolver/tags/csharp.scm` is hand-authored rather
+  than copied from upstream's `queries/tags.scm`: upstream's file uses
+  `definition.interface`/`definition.method`/`definition.module` and
+  `@reference.*`/`@module` captures this resolver's `DEF_KINDS` does not
+  recognise and does not use. Verified against `web-tree-sitter@0.26` and,
+  independently, `tree-sitter-cli@0.26.10 query`/`parse` against a clone at
+  the pinned commit: a sample covering all twelve captured declaration forms
+  (class, struct, record, interface, enum, delegate, method, constructor,
+  local function, property, field, enum member) parsed with zero `ERROR`
+  nodes and produced exactly the expected `@name`/`@definition.*` pairs and
+  nothing else.

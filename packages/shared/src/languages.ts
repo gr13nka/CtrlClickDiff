@@ -326,6 +326,41 @@ export const LANGUAGES: readonly Language[] = [
     //    itself be a declaration. Excluding it would hide every type alias.
     nonDeclaringLinePrefixes: ['#include', '//', '*'],
   },
+  {
+    // Registry key AND Monaco's language id, per the field doc above. The
+    // grammar asset key (resolver/grammars.ts) is also 'csharp' — Monaco's
+    // own id — even though the upstream grammar repo and its own generated
+    // artifact call themselves `c_sharp`; vendor/build-grammars.sh's copy
+    // step is what normalises `out.wasm` to vendor/tree-sitter-csharp.wasm,
+    // so nothing downstream of this file ever sees the underscore spelling.
+    id: 'csharp',
+    extensions: ['.cs'],
+    nonDeclaringLinePrefixes: [
+      // TRADE, not an obvious filter like Kotlin's `import`/`package`: a
+      // `using System;` directive-line is the top-of-file boilerplate this
+      // filter exists for, and is the common case. But `using Foo = Bar;`
+      // declares a type alias and `using var f = ...;` declares a local —
+      // both are real declarations a `using` line CAN carry in C#. Excluding
+      // the prefix is sound here only because tags/csharp.scm captures
+      // neither: there is no alias-declaration or local-variable pattern
+      // above, so no capture this file produces can ever sit on a `using`
+      // line. The day someone adds using-alias (or using-local) capture to
+      // tags/csharp.scm, this prefix must go — it would then silently hide
+      // real declarations, the same hazard the license-header case
+      // demonstrated for a filter that stopped being a filter.
+      'using',
+      // A line-comment line's first token is the comment marker itself —
+      // nothing after `//` is parsed as code, so no capture in
+      // tags/csharp.scm can start there.
+      '//',
+      // A block-comment continuation or terminator line starts with `*`
+      // (not `/*`, for the same reason as Kotlin: a line that OPENS a block
+      // comment can still close it and declare something on the same line,
+      // e.g. `/* note */ class Foo {}`, so only the continuation form is
+      // safe to exclude).
+      '*',
+    ],
+  },
 ];
 
 /**
