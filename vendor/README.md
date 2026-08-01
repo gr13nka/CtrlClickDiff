@@ -217,3 +217,26 @@ build next time.
   "declared vs. defined" distinction exists in `DEF_KINDS`, and a
   prototype's name is a legitimate Ctrl+click target). Also verified
   end-to-end against `web-tree-sitter@0.26` via `pnpm smoke`.
+
+### tree-sitter-cpp.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-cpp
+- **Pinned commit:** `8b5b49eb196bec7040441bee33b2c9a4838d6967` (main HEAD at
+  time of pinning)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 5,624,964 bytes (~5.4 MiB)
+- **sha256:** `1ed1882f87cdd964298450baf2a1ce864fdfd104da2790a95a2f5ffd4d0000e5`
+- **Notes:** `build-grammars.sh cpp` built cleanly against the pinned
+  commit's committed `src/parser.c` on the first attempt -- no `generate`
+  fallback was needed, unlike the caveat that script's Kotlin comment leaves
+  room for. Verified against `web-tree-sitter@0.26`:
+  `packages/backend/src/resolver/tags/cpp.scm` produced non-empty captures
+  of every kind this resolver recognises (`definition.class`,
+  `definition.function`, `definition.constant`, `definition.type`, `name`)
+  against both a hand-written multi-construct sample (struct/union/enum,
+  typedef, `using` alias, plain and pointer-returning function definitions,
+  a class with an in-class method declaration and its out-of-class
+  qualified definition) and the `pnpm smoke` sample in `smoke.ts`.
+  `.h` is claimed by the `cpp` registry entry in
+  `packages/shared/src/languages.ts`, not a separate `c` entry -- see that
+  file's comment.

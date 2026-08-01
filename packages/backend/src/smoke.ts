@@ -105,6 +105,15 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: '#define MAX 10\nstruct Point { int x; int y; };\nstatic int add(int a, int b) { return a + b; }\n',
     expectedNames: ['MAX', 'Point', 'add'],
   },
+  cpp: {
+    // Exercises four capture kinds in one line: a class with an in-class
+    // method DECLARATION (no body -- only tags/cpp.scm's field_declaration
+    // pattern can find it), a `using` alias, and the matching out-of-class
+    // method DEFINITION (qualified_identifier declarator). 'area' is
+    // expected to be captured from both the declaration and the definition.
+    sample: 'class Shape { int area() const; }; using Number = int; int Shape::area() const { return 0; }',
+    expectedNames: ['Shape', 'area', 'Number'],
+  },
 };
 
 async function main(): Promise<void> {

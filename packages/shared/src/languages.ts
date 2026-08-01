@@ -294,6 +294,38 @@ export const LANGUAGES: readonly Language[] = [
       '*',
     ],
   },
+  {
+    id: 'cpp',
+    // '.h' is claimed here, not by a separate C entry: most real-world .h
+    // files in mixed repos are C++-flavored (guards, extern "C", classes
+    // forward-declared alongside C structs), and the cpp grammar parses a
+    // plain C header acceptably. Registry order between a future c entry and
+    // this one would not matter today even if both wanted '.h' -- extension
+    // matching is a linear find(), so whichever entry the resolver has yet
+    // to see loses -- but nothing else in this repo currently claims it, so
+    // there is nothing to order against.
+    extensions: ['.cpp', '.cc', '.cxx', '.hpp', '.hh', '.h'],
+    // Each entry's one-line admissibility argument, made against
+    // tags/cpp.scm specifically (a line starting with this prefix CANNOT
+    // hold anything that file captures):
+    //  - '#include' names a path, never an identifier tags/cpp.scm captures.
+    //  - '//' opens a line comment; nothing after it on the same line is code.
+    //  - '*' is a block-comment continuation/terminator line and cannot be
+    //    anything else -- same argument as Kotlin's above, and for the same
+    //    reason '/*' is deliberately NOT in this list: a line that opens a
+    //    block comment can still close it and declare something
+    //    (`/* note */ struct Foo {`).
+    //
+    // Two prefixes a C/C++ reader might expect here and deliberately are
+    // NOT, because both CAN hold something tags/cpp.scm captures:
+    //  - bare '#': `#define FOO 100` / `#define SQUARE(x) ((x)*(x))` IS a
+    //    declaration -- captured as preproc_def / preproc_function_def --
+    //    so excluding every '#' line would silently drop every macro.
+    //  - 'using': `using Alias = T;` is a captured alias_declaration
+    //    (@definition.type), unlike Kotlin's `import`, which can never
+    //    itself be a declaration. Excluding it would hide every type alias.
+    nonDeclaringLinePrefixes: ['#include', '//', '*'],
+  },
 ];
 
 /**
