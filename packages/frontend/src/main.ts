@@ -1,5 +1,5 @@
 import './monaco-env';
-import type * as monaco from 'monaco-editor';
+import * as monaco from 'monaco-editor';
 import { registerDefinitions } from './defprovider';
 import { installTheme } from './theme';
 import {
@@ -66,6 +66,23 @@ if (!app) throw new Error('main.ts: #app element not found');
 // The predicate, not the file list: the provider asks about one path at a time
 // and must see the *current* selection, which a snapshot taken here could not.
 registerDefinitions(isInReview);
+
+// Every model here is a single file of one revision of someone else's repo —
+// imports can never resolve, so semantic squiggles would paint every TS/JS
+// diff red with noise that says nothing about the change under review. Syntax
+// validation goes too: the reviewer is reading a commit, not editing one.
+// Lives here rather than in monaco-env.ts, which deliberately does not import
+// monaco — it only defines MonacoEnvironment for the workers.
+monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
+  noSemanticValidation: true,
+  noSyntaxValidation: true,
+  noSuggestionDiagnostics: true
+});
+monaco.typescript.javascriptDefaults.setDiagnosticsOptions({
+  noSemanticValidation: true,
+  noSyntaxValidation: true,
+  noSuggestionDiagnostics: true
+});
 
 // Before initShell(), which starts the first cards loading: a theme set
 // afterwards would repaint them a frame late, and the theme is global state
