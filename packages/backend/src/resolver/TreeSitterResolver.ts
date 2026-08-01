@@ -41,6 +41,32 @@ interface LoadedGrammar {
 const DEFINITION_PREFIX = 'definition.';
 const DEF_KINDS: ReadonlySet<string> = new Set<DefKind>(['class', 'function', 'constant', 'type']);
 
+/**
+ * Every `definition.<kind>` capture a compiled tags query declares must have a
+ * <kind> in DEF_KINDS — `toDefMatch` silently drops anything else, and an
+ * empty `resolve()` answer is by contract indistinguishable from "no such
+ * symbol" (see the doc on `resolve()`). Upstream tags.scm conventions use
+ * kinds this resolver does not recognise (`definition.method`,
+ * `definition.interface`, ...), so a hand-authored tags file for a new
+ * language can name a capture that would vanish without a trace at the first
+ * Ctrl+click that needed it. Calling this at boot turns that into a startup
+ * failure instead, with the offending capture named.
+ */
+export function assertDefinitionKinds(query: Query, grammarKey: string): void {
+  for (const name of query.captureNames) {
+    if (!name.startsWith(DEFINITION_PREFIX)) continue;
+    const suffix = name.slice(DEFINITION_PREFIX.length);
+    if (!DEF_KINDS.has(suffix)) {
+      throw new Error(
+        `TreeSitterResolver.init: '${grammarKey}' tags query has capture '@${name}', ` +
+          `whose kind '${suffix}' is not a recognised DefKind (${[...DEF_KINDS].join(', ')}). ` +
+          `Rename the capture in the tags file to one of those, or add '${suffix}' to ` +
+          `DEF_KINDS in TreeSitterResolver.ts if it names a genuinely new definition kind.`,
+      );
+    }
+  }
+}
+
 interface DefMatch {
   name: string;
   location: DefLocation;
@@ -140,10 +166,19 @@ export class TreeSitterResolver implements SymbolResolver {
       const parser = new Parser();
       parser.setLanguage(lang);
 
-      this.grammars.set(language.id, {
-        parser,
-        query: new Query(lang, await readFile(grammar.tagsScmPath, 'utf8')),
-      });
+      const tagsSource = await readFile(grammar.tagsScmPath, 'utf8');
+      let query: Query;
+      try {
+        query = new Query(lang, tagsSource);
+      } catch (err) {
+        throw new Error(
+          `TreeSitterResolver.init: '${language.id}' tags query at ${grammar.tagsScmPath} ` +
+            `failed to compile: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      assertDefinitionKinds(query, language.id);
+
+      this.grammars.set(language.id, { parser, query });
     }
   }
 
