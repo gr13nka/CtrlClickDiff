@@ -46,3 +46,47 @@ build next time.
   timestamp guarantee. ABI compatibility, not byte identity, is what's
   required, and that's what `pnpm smoke` checks on every run; it passed
   against the committed wasm after this rebuild was verified and discarded.
+
+### tree-sitter-typescript.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-typescript
+  (`typescript/` subdirectory of the monorepo)
+- **Pinned commit:** `75b3874edb2dc714fb1fd77a32013d0f8699989f` (default
+  branch head at build time)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 1,418,202 bytes (~1.35 MiB)
+- **sha256:** `22fce33c21f07ca86d16c4ef7fbf398c015846125295df08adbfc9959232376b`
+- **Notes:** one repo, two grammars — `typescript/` cannot parse JSX, which is
+  why `tsx/` (below) is a separate wasm rather than a superset. The committed
+  `src/parser.c` built against `tree-sitter-cli@0.26.10` with no ABI
+  mismatch and no need for the `generate` fallback in this script. Verified
+  against `web-tree-sitter@0.26`: loaded with zero errors, and
+  `packages/backend/src/resolver/tags/typescript.scm` produced non-empty
+  captures (`definition.class`, `definition.function`, `definition.constant`,
+  `definition.type`, `name`) against a sample exercising a class, a method, an
+  interface and a top-level const.
+
+### tree-sitter-tsx.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-typescript
+  (`tsx/` subdirectory of the monorepo — same repo and commit as
+  `tree-sitter-typescript.wasm` above, different subdir)
+- **Pinned commit:** `75b3874edb2dc714fb1fd77a32013d0f8699989f` (default
+  branch head at build time)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 1,450,757 bytes (~1.38 MiB)
+- **sha256:** `94917d337bbe28c0a77cdd19e6ae2d6de558fcc1b95b090d90ef96b496654e7e`
+- **Notes:** shares `packages/backend/src/resolver/tags/typescript.scm` with
+  the plain `typescript` grammar rather than getting its own file — the
+  declaration node shapes (`class_declaration`, `function_declaration`,
+  `method_definition`, `interface_declaration`, ...) are identical between
+  the two generated grammars, JSX support being additive rather than a
+  reshaping of the declaration grammar. Compiling that one query against both
+  wasms at boot (`TreeSitterResolver.init`, once per grammar key) is itself
+  the drift detector: if a future upstream change ever makes the two grammars
+  disagree on a captured node shape, one of the two `Query` constructions
+  fails at boot rather than one of the two silently stopping to capture.
+  Verified against `web-tree-sitter@0.26`: loaded with zero errors, and the
+  shared tags file produced non-empty captures against a JSX sample
+  (`export function App() { return <div/> }` plus a top-level arrow-function
+  const).

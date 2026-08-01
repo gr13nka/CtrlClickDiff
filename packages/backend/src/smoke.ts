@@ -42,6 +42,38 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'class Foo { fun bar() {} }',
     expectedNames: ['Foo', 'bar'],
   },
+  // Exercises class + method + interface + top-level const, per
+  // tags/typescript.scm's four capture kinds (class, function, function,
+  // constant) in one sample — the same file also proves the two
+  // definition.function patterns (method_definition and the arrow-valued
+  // top-level const) don't collide on a name.
+  typescript: {
+    sample: `
+      class Greeter {
+        greet() { return 'hi'; }
+      }
+      interface Named {
+        name: string;
+      }
+      const VERSION = '1.0';
+    `,
+    expectedNames: ['Greeter', 'greet', 'Named', 'VERSION'],
+  },
+  // Must contain JSX — this is the sample that proves tsx.wasm (not just
+  // typescript.wasm) loads and that tags/typescript.scm's shared query
+  // captures a definition.function through actual JSX syntax, which the
+  // 'typescript' sample above never touches.
+  tsx: {
+    sample: `
+      export function App() {
+        return <div/>;
+      }
+      const Widget = () => {
+        return <span/>;
+      };
+    `,
+    expectedNames: ['App', 'Widget'],
+  },
 };
 
 async function main(): Promise<void> {

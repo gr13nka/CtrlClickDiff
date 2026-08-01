@@ -33,6 +33,8 @@ trap '[[ -n "$CLEANUP_DIR" ]] && rm -rf "$CLEANUP_DIR"' EXIT
 # and nothing else needs to change to build it.
 declare -A GRAMMARS=(
   [kotlin]="https://github.com/fwcd/tree-sitter-kotlin|c8ac3d2627240160b999a2c100de3babbdb8f419|"
+  [typescript]="https://github.com/tree-sitter/tree-sitter-typescript|75b3874edb2dc714fb1fd77a32013d0f8699989f|typescript"
+  [tsx]="https://github.com/tree-sitter/tree-sitter-typescript|75b3874edb2dc714fb1fd77a32013d0f8699989f|tsx"
 )
 
 usage() {

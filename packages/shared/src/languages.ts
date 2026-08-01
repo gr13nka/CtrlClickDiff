@@ -91,6 +91,43 @@ export const LANGUAGES: readonly Language[] = [
     extensions: ['.kt'],
     nonDeclaringLinePrefixes: ['import', 'package', '//', '*'],
   },
+  // TypeScript is the `grammar` field's reason for existing: `.ts` and `.tsx`
+  // are one Monaco language (`id: 'typescript'`, so a Ctrl+click started in
+  // either registers against the same provider and can find a definition in
+  // the other — see TreeSitterResolver.resolve's `siblings`), but tsx.wasm is
+  // a SEPARATE tree-sitter grammar from typescript.wasm because the plain
+  // grammar cannot parse JSX. Both rows share
+  // packages/backend/src/resolver/tags/typescript.scm (the declaration
+  // shapes are identical — see that file's header for what that promise
+  // actually costs: `.ts` gets `type_assertion`, `.tsx` gets the two `jsx_*`
+  // node types, and the shared query only names what both grammars have).
+  {
+    id: 'typescript',
+    extensions: ['.ts'],
+    // 'import' — an import line only ever binds an alias ('import { x } from
+    //   "y"', 'import x = require("y")'); nothing tags/typescript.scm
+    //   captures can start a line with that keyword.
+    // '//' / '*' — a comment line or block-comment continuation cannot hold
+    //   a captured declaration, same argument as Kotlin's.
+    // Deliberately NOT 'export': 'export function f() {}' and 'export const
+    //   x = 1' both declare, and both are exactly what this file's
+    //   variable-declarator patterns exist to capture — filtering the line
+    //   out before parsing even looks at it would silently drop every
+    //   exported top-level declaration, not just noise.
+    nonDeclaringLinePrefixes: ['import', '//', '*'],
+  },
+  {
+    id: 'typescript',
+    extensions: ['.tsx'],
+    grammar: 'tsx',
+    // Element-wise identical to the '.ts' row above — TreeSitterResolver.init
+    // boot-asserts every LANGUAGES group sharing an `id` agrees, because
+    // resolve() applies the CLICKED entry's filter across every sibling's
+    // candidates (see the comment on `siblings` there); a `.tsx`-started
+    // click must filter `.ts` candidates by the same rule '.ts' would have
+    // used, or the answer would depend on which file the gesture began in.
+    nonDeclaringLinePrefixes: ['import', '//', '*'],
+  },
 ];
 
 /**

@@ -38,6 +38,20 @@ export const GRAMMARS: Readonly<Record<string, GrammarAssets>> = {
     wasmPath: resolvePath(REPO_ROOT, 'vendor/tree-sitter-kotlin.wasm'),
     tagsScmPath: resolvePath(here, 'tags/kotlin.scm'),
   },
+  typescript: {
+    wasmPath: resolvePath(REPO_ROOT, 'vendor/tree-sitter-typescript.wasm'),
+    tagsScmPath: resolvePath(here, 'tags/typescript.scm'),
+  },
+  // Separate grammar, same tags file as `typescript` above — the declaration
+  // node shapes tags/typescript.scm names are identical between the two
+  // generated grammars (JSX is additive), so compiling that one query
+  // against both wasms here at boot is what proves it stays true; see that
+  // file's header for the one place they provably differ (type_assertion vs
+  // the jsx_* nodes) and why the shared query only uses the intersection.
+  tsx: {
+    wasmPath: resolvePath(REPO_ROOT, 'vendor/tree-sitter-tsx.wasm'),
+    tagsScmPath: resolvePath(here, 'tags/typescript.scm'),
+  },
 };
 
 /**
