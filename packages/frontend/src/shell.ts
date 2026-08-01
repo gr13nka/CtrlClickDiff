@@ -14,7 +14,6 @@
 
 import type * as monaco from 'monaco-editor';
 import {
-  SOURCE_EXTENSIONS,
   type BranchInfo,
   type CommitInfo,
   type Preview,
@@ -789,16 +788,15 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
   // deleted file would be hiding a change.
   band?.render(requireRepoId(), files);
 
-  // The extensions come from the registry, the sentence does not: phrasing is
-  // this call site's business, and a shared label helper would have exactly one
-  // caller (same argument storage.ts makes for refusing readNumber/readJson).
-  const kinds = SOURCE_EXTENSIONS.join('/');
+  // Fixed wording rather than the registry's extension list: with a dozen-plus
+  // languages, spelling out ".kt/.ts/.tsx/.js/..." in a sentence stops reading
+  // as a sentence.
   setStatus(
     files.length > 0
       ? ''
       : selection.length > 1
-        ? `No ${kinds} files changed in these commits.`
-        : `No ${kinds} files changed in this commit.`,
+        ? 'No reviewable source files changed in these commits.'
+        : 'No reviewable source files changed in this commit.',
   );
 }
 
