@@ -91,6 +91,10 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'class Foo { int bar; void baz() {} }',
     expectedNames: ['Foo', 'bar', 'baz'],
   },
+  go: {
+    sample: 'package main\n\nconst Pi = 3\n\ntype Point struct {\n\tX int\n}\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n',
+    expectedNames: ['Pi', 'Point', 'Add'],
+  },
 };
 
 async function main(): Promise<void> {

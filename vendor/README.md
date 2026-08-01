@@ -155,3 +155,19 @@ build next time.
   captured declaration forms (class, record, enum, interface,
   annotation-type, method, constructor, field, enum-constant) produced
   exactly the expected `@name`/`@definition.*` pairs and nothing else.
+
+### tree-sitter-go.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-go
+- **Pinned commit:** `2346a3ab1bb3857b48b29d779a1ef9799a248cd7` (HEAD at pin time)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 218,890 bytes (~214 KiB)
+- **sha256:** `9c3338a4567a4d30bf3b29f92371fcb085e8a9822c3f45a7d3d95f73cc2fe677`
+- **Notes:** the committed `src/parser.c` at the pinned commit built cleanly
+  with `tree-sitter-cli@0.26.10`'s `build --wasm` — no `generate`
+  regeneration step was needed (unlike the fallback `build-grammars.sh`
+  documents in comment form). Verified against `web-tree-sitter@0.26`:
+  loaded, parsed a scratch Go file with zero parse errors, and
+  `packages/backend/src/resolver/tags/go.scm` produced non-empty captures
+  (`definition.function`, `definition.type`, `definition.constant`, `name`)
+  against it.

@@ -38,6 +38,7 @@ declare -A GRAMMARS=(
   [javascript]="https://github.com/tree-sitter/tree-sitter-javascript|58404d8cf191d69f2674a8fd507bd5776f46cb11|"
   [python]="https://github.com/tree-sitter/tree-sitter-python|26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64|"
   [java]="https://github.com/tree-sitter/tree-sitter-java|e10607b45ff745f5f876bfa3e94fbcc6b44bdc11|"
+  [go]="https://github.com/tree-sitter/tree-sitter-go|2346a3ab1bb3857b48b29d779a1ef9799a248cd7|"
 )
 
 usage() {

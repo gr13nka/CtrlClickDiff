@@ -199,6 +199,29 @@ export const LANGUAGES: readonly Language[] = [
       '*',
     ],
   },
+  {
+    id: 'go',
+    extensions: ['.go'],
+    // Argued against tags/go.scm's own capture set (function_declaration,
+    // method_declaration, type_spec, const_spec, var_spec — see that file):
+    //  - 'import': an import line names a package path, never a declaration;
+    //    same reasoning as Kotlin's package-segment case, and Go's import
+    //    grammar cannot embed one (`import "fmt"` / `import ( ... )`).
+    //  - 'package': the package clause is exactly one line per file and
+    //    grammatically cannot carry a func/type/const/var alongside it.
+    //  - '//': a line comment. Nothing tags/go.scm captures can start after
+    //    `//` on the same line and still be `//`-prefixed at the line start.
+    //  - '*': either a `/* ... */` block-comment continuation/terminator, or
+    //    a pointer-dereference STATEMENT (`*p = v`) — an assignment, not a
+    //    declaration. Every node tags/go.scm captures begins its line with
+    //    `func`, `type`, `const`, or `var`, so a `*`-first line cannot hold
+    //    one. (`/*` itself is deliberately excluded, same as Kotlin: a block
+    //    comment can open and close on one line and still declare something
+    //    after it, e.g. `/* note */ func Foo() {}` — confirmed against this
+    //    grammar, which parses that as a `comment` node followed by a
+    //    `function_declaration` on the same row.)
+    nonDeclaringLinePrefixes: ['import', 'package', '//', '*'],
+  },
 ];
 
 /**
