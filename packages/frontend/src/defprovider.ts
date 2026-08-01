@@ -24,7 +24,7 @@
 // model it started from.
 
 import * as monaco from 'monaco-editor';
-import { LANGUAGES, type DefLocation } from '@ctrlclickdiff/shared';
+import { LANGUAGES, languageForPath, type DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { getOrCreateModel, modelUri, parseModelUri } from './diff';
 import { applyPeekScope } from './peekscope';
@@ -188,10 +188,14 @@ export function registerDefinitions(inReview: InReview): void {
         // inside the loop, in defs order — these models are what make cross-file
         // peek render at all.
         //
-        // Same language as the model the click started in — a definition is
-        // resolved within the language of the file it was asked from, so the
-        // target's language is known without consulting the registry again.
-        getOrCreateModel(uriStr, sources[index]!, model.getLanguageId());
+        // Derived from the TARGET path, not inherited from the clicked model's
+        // language. For any resolution today the two are the same value by
+        // construction — candidates are scoped to one language — but a
+        // declared language can disagree with the file it names, and a
+        // derived one cannot (the same argument that deleted DefQuery.lang,
+        // see packages/shared/src/types.ts). This is the rule that stays true
+        // if resolution ever crosses registry entries.
+        getOrCreateModel(uriStr, sources[index]!, languageForPath(loc.path)?.id ?? 'plaintext');
         const location = {
           uri: monaco.Uri.parse(uriStr),
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)
