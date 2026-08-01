@@ -90,3 +90,24 @@ build next time.
   shared tags file produced non-empty captures against a JSX sample
   (`export function App() { return <div/> }` plus a top-level arrow-function
   const).
+
+### tree-sitter-javascript.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-javascript
+- **Pinned commit:** `58404d8cf191d69f2674a8fd507bd5776f46cb11` (HEAD, resolved
+  via `git ls-remote` on 2026-08-02)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 416,480 bytes (~407 KiB)
+- **sha256:** `ccec1d78b6a9e40563b7255c1b7d10423fc610ca26bdbafe8c7886de4c980d3d`
+- **Notes:** built straight from the pinned commit with no `generate` fallback
+  needed -- the committed `src/parser.c` was already current for this CLI's
+  ABI. This grammar parses JSX natively (`jsx_element`/`jsx_expression` node
+  types live in the same grammar as everything else), unlike
+  tree-sitter-typescript which ships a separate `tsx` grammar for the same
+  reason -- so `.jsx` needs no second wasm and no second registry entry, only
+  a fourth extension on the one `javascript` row. Verified against
+  `web-tree-sitter@0.26`: parsed a sample with a class, a method, a top-level
+  const, and a JSX expression with zero parse errors, and
+  `packages/backend/src/resolver/tags/javascript.scm` produced the expected
+  `definition.class`/`definition.function`/`definition.constant`/`name`
+  captures against it (see `pnpm smoke`'s `javascript` row).

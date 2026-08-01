@@ -35,6 +35,7 @@ declare -A GRAMMARS=(
   [kotlin]="https://github.com/fwcd/tree-sitter-kotlin|c8ac3d2627240160b999a2c100de3babbdb8f419|"
   [typescript]="https://github.com/tree-sitter/tree-sitter-typescript|75b3874edb2dc714fb1fd77a32013d0f8699989f|typescript"
   [tsx]="https://github.com/tree-sitter/tree-sitter-typescript|75b3874edb2dc714fb1fd77a32013d0f8699989f|tsx"
+  [javascript]="https://github.com/tree-sitter/tree-sitter-javascript|58404d8cf191d69f2674a8fd507bd5776f46cb11|"
 )
 
 usage() {

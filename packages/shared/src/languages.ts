@@ -128,6 +128,40 @@ export const LANGUAGES: readonly Language[] = [
     // used, or the answer would depend on which file the gesture began in.
     nonDeclaringLinePrefixes: ['import', '//', '*'],
   },
+  {
+    id: 'javascript',
+    // tree-sitter-javascript parses JSX natively — jsx_element/jsx_expression
+    // are ordinary node types in the same grammar as everything else, not a
+    // second grammar the way tree-sitter-typescript needs one wasm for `.ts`
+    // and a second (`tsx`) for `.tsx` because the `.ts` grammar cannot parse
+    // JSX at all. So `.jsx` costs one more extension on this one row and
+    // nothing else — no second `grammar` key, no second tags file.
+    extensions: ['.js', '.jsx', '.mjs', '.cjs'],
+    // Argued against resolver/tags/javascript.scm, which is the standard: a
+    // line starting with this prefix cannot hold anything that file captures
+    // (class_declaration, method_definition, function_declaration,
+    // generator_function_declaration, or a top-level variable_declarator).
+    //
+    //  - 'import': binds a local name to something another module exports
+    //    (import_statement/import_clause); it names an alias for a
+    //    declaration, never is one — same argument as Kotlin's `import`.
+    //  - '//': a line comment. Nothing tags.scm captures is expressible as
+    //    text after `//` on the same line; the declaration would have to
+    //    start the line, not follow a comment marker on it.
+    //  - '*': a JSDoc/block-comment continuation or terminator line, same
+    //    reasoning as Kotlin's `*` — a line *starting* with `*` cannot also
+    //    open new code, only close or continue a `/* ... */` run.
+    //
+    // Deliberately NOT 'export': `export const foo = ...` and
+    // `export function foo() {}` are exactly the top-level-declaration shapes
+    // javascript.scm captures via its `export_statement` branches. Filtering
+    // `export`-prefixed lines out of candidate discovery would silently drop
+    // every exported top-level definition whose only declaring line starts
+    // with the word `export` — this is the same class of mistake `package`
+    // would be for Kotlin if `package` ever legally preceded a declaration
+    // rather than only naming one.
+    nonDeclaringLinePrefixes: ['import', '//', '*'],
+  },
 ];
 
 /**

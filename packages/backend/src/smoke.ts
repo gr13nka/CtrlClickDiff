@@ -74,6 +74,15 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     `,
     expectedNames: ['App', 'Widget'],
   },
+  // Exercises three capture kinds at once: a class with a method
+  // (definition.class + definition.function via method_definition), a
+  // top-level const (definition.constant), and a JSX expression as that
+  // const's value — proving the grammar parses JSX natively rather than
+  // needing a second wasm the way tree-sitter-typescript does for `.tsx`.
+  javascript: {
+    sample: 'class Foo { bar() {} }\nconst baz = <div>{1}</div>;',
+    expectedNames: ['Foo', 'bar', 'baz'],
+  },
 };
 
 async function main(): Promise<void> {
