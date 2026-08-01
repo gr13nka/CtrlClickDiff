@@ -250,6 +250,50 @@ export const LANGUAGES: readonly Language[] = [
     extensions: ['.rs'],
     nonDeclaringLinePrefixes: ['use', '//', '*'],
   },
+  {
+    // '.c' ONLY — '.h' deliberately belongs to a future 'cpp' entry, not this
+    // one, because tree-sitter-cpp parses C headers acceptably and a header
+    // is more often included from C++ than from plain C. Accepted
+    // limitation, not a bug: until that entry exists, a Ctrl+click in a .c
+    // file on a macro or typedef declared in a .h cannot find it, because
+    // `languageForPath('foo.h')` answers undefined rather than 'c' — the
+    // header is outside every registered extension list, so it is not a
+    // candidate file `git grep` would even be asked to search. This is a
+    // scoping-rule decision to revisit on real evidence (a 'cpp' entry
+    // landing, or a concrete case where it costs a reader something), not
+    // a defect in this row.
+    id: 'c',
+    extensions: ['.c'],
+    // Same shape as the kotlin/java rows above: every prefix here is argued
+    // against tags/c.scm's OWN captures (struct/union-with-body, enum-with-
+    // body, typedef, #define, #define(args), function declarators,
+    // enumerators) — the standard is that a line starting with the prefix
+    // cannot hold anything that file captures.
+    nonDeclaringLinePrefixes: [
+      // `#include <stdio.h>` / `#include "x.h"` brings a header's contents
+      // into scope; the tree-sitter node is `preproc_include`, which
+      // tags/c.scm does not capture anything from. Deliberately NOT bare
+      // `#`: `#define MAX 10` and `#define SQUARE(x) ...` both start with
+      // `#` too, and both DO declare something tags/c.scm captures
+      // (preproc_def / preproc_function_def) — excluding all preprocessor
+      // lines would silently hide every macro definition. '#include' ends
+      // in a word character ('e'), so the `\b` this module's prefix
+      // matching appends still requires a boundary after it — `#include`
+      // followed by whitespace or `<`/`"` matches, `#includeFoo` (not real
+      // C, but the boundary is what makes the rule correct in general)
+      // would not.
+      '#include',
+      // A line-comment line's first token is the comment marker itself —
+      // nothing after `//` is parsed as code.
+      '//',
+      // A block-comment continuation or terminator line starts with `*`
+      // (not `/*`, for the same reason as Kotlin and Java: a line that
+      // OPENS a block comment can still close it and declare something on
+      // the same line, e.g. `/* note */ struct Point { int x; };`, so only
+      // the continuation form is safe to exclude).
+      '*',
+    ],
+  },
 ];
 
 /**

@@ -40,6 +40,7 @@ declare -A GRAMMARS=(
   [java]="https://github.com/tree-sitter/tree-sitter-java|e10607b45ff745f5f876bfa3e94fbcc6b44bdc11|"
   [go]="https://github.com/tree-sitter/tree-sitter-go|2346a3ab1bb3857b48b29d779a1ef9799a248cd7|"
   [rust]="https://github.com/tree-sitter/tree-sitter-rust|77a3747266f4d621d0757825e6b11edcbf991ca5|"
+  [c]="https://github.com/tree-sitter/tree-sitter-c|b780e47fc780ddc8da13afa35a3f4ed5c157823d|"
 )
 
 usage() {

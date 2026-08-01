@@ -188,3 +188,32 @@ build next time.
   `packages/backend/src/resolver/tags/rust.scm` produced non-empty captures
   (`definition.function`, `definition.class`, `definition.type`,
   `definition.constant`, `name`) against it.
+
+### tree-sitter-c.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-c
+- **Pinned commit:** `b780e47fc780ddc8da13afa35a3f4ed5c157823d` (HEAD, resolved
+  via `git ls-remote`)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 645,147 bytes (~630 KiB)
+- **sha256:** `d2d6726991d1df77d86efaee60d47c70a8ce723501037f76b7462dc220326e9b`
+- **Notes:** the upstream repo ships a committed `src/parser.c` that built
+  cleanly with `tree-sitter-cli@0.26.10 build --wasm` directly -- no
+  `generate` regeneration step was needed. `packages/backend/src/resolver/tags/c.scm`
+  is hand-authored rather than copied from upstream's `queries/tags.scm`:
+  upstream's file captures `struct`/`union` bodies unconditionally (would
+  also fire on a bare `struct Foo;` forward declaration were it not for the
+  `body:` field constraint this file adds) and has no macro/typedef
+  captures at all. Verified against `tree-sitter-cli@0.26.10 query` on a
+  clone at the pinned commit, against a sample covering all eight captured
+  forms (object-like macro, function-like macro, struct-with-body,
+  union-with-body, enum-with-body, typedef, plain function, pointer-
+  returning function): every capture matched the kind
+  `packages/backend/src/resolver/tags/c.scm`'s header comment predicts, and
+  a forward declaration (`struct Point;`) plus a bare prototype
+  (`int proto(int a, int b);`) were checked too -- the forward declaration
+  produced no capture (no `body:` field to match), the prototype's name
+  was captured as `@definition.function` same as a real definition (no
+  "declared vs. defined" distinction exists in `DEF_KINDS`, and a
+  prototype's name is a legitimate Ctrl+click target). Also verified
+  end-to-end against `web-tree-sitter@0.26` via `pnpm smoke`.

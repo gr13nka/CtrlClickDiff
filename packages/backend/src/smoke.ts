@@ -101,6 +101,10 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
       'pub trait Baz { fn qux(&self); }\n',
     expectedNames: ['Foo', 'bar', 'N', 'Baz', 'qux'],
   },
+  c: {
+    sample: '#define MAX 10\nstruct Point { int x; int y; };\nstatic int add(int a, int b) { return a + b; }\n',
+    expectedNames: ['MAX', 'Point', 'add'],
+  },
 };
 
 async function main(): Promise<void> {
