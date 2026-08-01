@@ -270,3 +270,19 @@ build next time.
   local function, property, field, enum member) parsed with zero `ERROR`
   nodes and produced exactly the expected `@name`/`@definition.*` pairs and
   nothing else.
+
+### tree-sitter-ruby.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-ruby
+- **Pinned commit:** `ad907a69da0c8a4f7a943a7fe012712208da6dee` (main, HEAD at pin time)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 2,126,182 bytes (~2.0 MiB)
+- **sha256:** `09d45a93dd0afe7b0fd43a058c7accea8aca4c32f59975cdb30a2425ff566b5b`
+- **Notes:** the committed `src/parser.c` at the pinned commit built directly
+  with `build --wasm` -- no `tree-sitter-cli generate` regeneration was
+  needed (unlike the fallback `build-grammars.sh` documents for a grammar
+  whose `parser.c` predates the target ABI). Verified against
+  `web-tree-sitter@0.26`: parsed a sample Ruby file with zero parse errors,
+  and `packages/backend/src/resolver/tags/ruby.scm` produced the expected
+  captures (`definition.class`, `definition.function`, `definition.constant`,
+  `name`) against it.

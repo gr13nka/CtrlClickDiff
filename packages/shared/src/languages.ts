@@ -361,6 +361,27 @@ export const LANGUAGES: readonly Language[] = [
       '*',
     ],
   },
+  {
+    id: 'ruby',
+    extensions: ['.rb'],
+    // Argued against tags/ruby.scm's own capture set (class, module, method,
+    // singleton_method, and assignment with a bare `(constant)` left-hand
+    // side — see that file):
+    //  - 'require': `require 'foo'` is a method-call statement (an implicit-
+    //    receiver call with a string argument), never a class/module/method
+    //    declaration nor a constant assignment.
+    //  - 'require_relative': needed as its own entry, not covered by
+    //    'require' alone — the grep appends `\b` to a prefix ending in a word
+    //    character, and `require\b` does NOT match `require_relative`
+    //    (`_` is a word character, so there is no boundary between `require`
+    //    and `_relative`). Without this second entry every
+    //    `require_relative` line would go unfiltered.
+    //  - '#': a line comment. Nothing tags/ruby.scm captures can start after
+    //    `#` on the same line and still be `#`-prefixed at the line start —
+    //    unlike Kotlin/Go's `/* ... */`, Ruby has no block-comment syntax
+    //    that can open, close and still declare something on the same line.
+    nonDeclaringLinePrefixes: ['require', 'require_relative', '#'],
+  },
 ];
 
 /**

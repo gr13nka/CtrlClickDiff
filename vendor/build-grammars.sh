@@ -43,6 +43,7 @@ declare -A GRAMMARS=(
   [c]="https://github.com/tree-sitter/tree-sitter-c|b780e47fc780ddc8da13afa35a3f4ed5c157823d|"
   [cpp]="https://github.com/tree-sitter/tree-sitter-cpp|8b5b49eb196bec7040441bee33b2c9a4838d6967|"
   [csharp]="https://github.com/tree-sitter/tree-sitter-c-sharp|9150f7d56bb47f1a809fa23623f1ba1413e93fa9|"
+  [ruby]="https://github.com/tree-sitter/tree-sitter-ruby|ad907a69da0c8a4f7a943a7fe012712208da6dee|"
 )
 
 usage() {

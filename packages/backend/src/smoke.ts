@@ -118,6 +118,10 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'class Foo { public int Bar { get; set; } public void Baz() {} } interface IQux { }',
     expectedNames: ['Foo', 'Bar', 'Baz', 'IQux'],
   },
+  ruby: {
+    sample: 'class Foo\n  MAX = 10\n  def bar\n  end\nend\n',
+    expectedNames: ['Foo', 'MAX', 'bar'],
+  },
 };
 
 async function main(): Promise<void> {
