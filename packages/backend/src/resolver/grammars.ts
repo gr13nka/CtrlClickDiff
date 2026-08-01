@@ -45,18 +45,29 @@ export const GRAMMARS: Readonly<Record<string, GrammarAssets>> = {
  * hand it back through an explicit `locateFile` override. Falls back gracefully
  * to `Parser.init()`'s own default behavior if resolution fails — the real
  * failure signal is the grammar load, not this.
+ *
+ * The filename is `web-tree-sitter.wasm`, not `tree-sitter.wasm` — the
+ * package was renamed in 0.26 (it used to publish as `tree-sitter.wasm`
+ * alongside `tree-sitter.js`) and both branches here still looked for the
+ * old name. That made this function fail silently and return `undefined`
+ * on every 0.26.x install; the resolver kept working anyway only because
+ * `Parser.init()`'s default `locateFile` falls back to a plain HTTP-style
+ * fetch of the wasm next to the loaded JS, which happens to still work
+ * under tsx. Check both the subpath export and the sibling filename
+ * against the installed package on the next web-tree-sitter upgrade —
+ * this is exactly the kind of rename that breaks both silently again.
  */
 export function treeSitterRuntimeWasm(): string | undefined {
   try {
     // Subpath export — works if web-tree-sitter's package.json "exports"
     // exposes the .wasm file directly.
-    return require.resolve('web-tree-sitter/tree-sitter.wasm');
+    return require.resolve('web-tree-sitter/web-tree-sitter.wasm');
   } catch {
     try {
       // Fall back: find the package's main entry and assume the runtime wasm
       // sits alongside it.
       const pkgEntry = require.resolve('web-tree-sitter');
-      const candidate = resolvePath(dirname(pkgEntry), 'tree-sitter.wasm');
+      const candidate = resolvePath(dirname(pkgEntry), 'web-tree-sitter.wasm');
       return existsSync(candidate) ? candidate : undefined;
     } catch {
       return undefined;
