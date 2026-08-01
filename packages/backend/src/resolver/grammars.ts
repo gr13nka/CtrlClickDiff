@@ -25,10 +25,13 @@ export interface GrammarAssets {
 }
 
 /**
- * Keyed by Language.id. Every id in LANGUAGES must appear here — asserted at
- * boot by TreeSitterResolver.init, because a missing grammar makes Ctrl+click
- * answer empty rather than fail, and an empty answer is indistinguishable from
- * "no such symbol".
+ * Keyed by grammar key (`grammarKeyFor`, from `@ctrlclickdiff/shared`), NOT
+ * `Language.id` — several LANGUAGES entries can share an id (one Monaco
+ * language, several tree-sitter grammars) but must not share a grammar key.
+ * Every grammar key LANGUAGES names must appear here — asserted at boot by
+ * TreeSitterResolver.init, because a missing grammar makes Ctrl+click answer
+ * empty rather than fail, and an empty answer is indistinguishable from "no
+ * such symbol".
  */
 export const GRAMMARS: Readonly<Record<string, GrammarAssets>> = {
   kotlin: {

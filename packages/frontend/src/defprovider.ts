@@ -218,8 +218,12 @@ export function registerDefinitions(inReview: InReview): void {
 
   // The same provider instance for every language: it reads what it needs from
   // the model it was handed, so there is nothing per-language to close over.
-  for (const language of LANGUAGES) {
-    monaco.languages.registerDefinitionProvider(language.id, provider);
+  // Deduplicated by id, not looped over LANGUAGES directly: two registry
+  // entries can share a Monaco language id (one grammar per file extension,
+  // e.g. `.ts`/`.tsx`), and registering the same provider twice for one id
+  // would make Monaco return every definition twice.
+  for (const id of new Set(LANGUAGES.map((l) => l.id))) {
+    monaco.languages.registerDefinitionProvider(id, provider);
   }
 
   // F12 / "go to definition" on a cross-file Location routes through here

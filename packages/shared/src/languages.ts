@@ -22,11 +22,27 @@ export interface Language {
    *
    * The identity is the point, not a coincidence: it is what makes
    * `registerDefinitionProvider(lang.id)` and `createModel(src, lang.id, uri)`
-   * the same string by construction rather than by two files agreeing. A
-   * language whose Monaco id differs from its registry key is when this splits
-   * into two fields, and not before.
+   * the same string by construction rather than by two files agreeing. The
+   * split this doc used to anticipate has now happened, but on the `grammar`
+   * field below, not here: `id` stays fused to Monaco's language id because
+   * that agreement-by-construction is the whole point of the field, and
+   * splitting it would just move the two-files-must-agree hazard back in.
+   * Two registry entries MAY now share an `id` — see `grammar`.
    */
   readonly id: string;
+  /**
+   * Key into the backend's grammar-asset table (`resolver/grammars.ts`),
+   * defaulting to `id` when unset — use `grammarKeyFor`, never this field
+   * directly, so that fallback lives in exactly one place.
+   *
+   * Exists because a Monaco language id and a tree-sitter grammar are not
+   * always one-to-one: tree-sitter-typescript ships TWO grammars,
+   * `typescript.wasm` and `tsx.wasm`, because the former cannot parse JSX —
+   * but `.ts` and `.tsx` are both `id: 'typescript'` to Monaco. That needs two
+   * LANGUAGES entries sharing an `id` with different `grammar` keys, not two
+   * `id`s, or `registerDefinitionProvider`/`createModel` would stop agreeing.
+   */
+  readonly grammar?: string;
   /** Extensions this language claims, leading dot included, matched as a path suffix. */
   readonly extensions: readonly string[];
   /**
@@ -92,4 +108,9 @@ export function languageForPath(path: string): Language | undefined {
 /** Whether any registered language claims `path`. */
 export function isSourcePath(path: string): boolean {
   return languageForPath(path) !== undefined;
+}
+
+/** The key `lang` loads its grammar under — `lang.grammar` if set, else `lang.id`. */
+export function grammarKeyFor(lang: Language): string {
+  return lang.grammar ?? lang.id;
 }

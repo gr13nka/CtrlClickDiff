@@ -22,6 +22,7 @@ import { Parser, Language, Query, type Node as TSNode, type QueryMatch } from 'w
 import {
   LANGUAGES,
   languageForPath,
+  grammarKeyFor,
   type DefKind,
   type DefLocation,
   type DefQuery,
@@ -122,6 +123,7 @@ function symbolsKey(repoRoot: string, revision: string, path: string): string {
 }
 
 export class TreeSitterResolver implements SymbolResolver {
+  /** Keyed by grammar key (`grammarKeyFor`), NOT `Language.id` — see init(). */
   private readonly grammars = new Map<string, LoadedGrammar>();
 
   /**
@@ -138,27 +140,35 @@ export class TreeSitterResolver implements SymbolResolver {
 
   /**
    * `Parser.init()`, then one `Language.load` + `new Query` per registered
-   * language. Must be awaited once at boot before resolve is usable.
+   * grammar KEY (`grammarKeyFor`, not `Language.id` — several LANGUAGES entries
+   * can share an id with different grammars, e.g. `.ts`/`.tsx` both Monaco
+   * `typescript`). Must be awaited once at boot before resolve is usable.
    *
-   * Every id in LANGUAGES must have assets here, and a missing one throws at
-   * boot rather than later: without a grammar, resolve() answers `[]`, and an
-   * empty answer is indistinguishable from "no such symbol" by contract — so a
-   * misconfiguration would surface as a feature that silently does nothing.
+   * Every grammar key LANGUAGES names must have assets here, and a missing one
+   * throws at boot rather than later: without a grammar, resolve() answers
+   * `[]`, and an empty answer is indistinguishable from "no such symbol" by
+   * contract — so a misconfiguration would surface as a feature that silently
+   * does nothing.
    */
   async init(assets: Readonly<Record<string, GrammarAssets>>): Promise<void> {
     const runtimeWasm = treeSitterRuntimeWasm();
     await Parser.init(runtimeWasm ? { locateFile: () => runtimeWasm } : undefined);
 
     for (const language of LANGUAGES) {
-      const grammar = assets[language.id];
+      const key = grammarKeyFor(language);
+      // Two LANGUAGES entries can name the same grammar key on purpose (two
+      // `.ts`-like ids sharing one grammar) — load it once, not once per entry.
+      if (this.grammars.has(key)) continue;
+
+      const grammar = assets[key];
       if (!grammar) {
-        throw new Error(`TreeSitterResolver.init: no grammar assets registered for '${language.id}'`);
+        throw new Error(`TreeSitterResolver.init: no grammar assets registered for '${key}'`);
       }
 
       const lang = await Language.load(grammar.wasmPath);
       if (!lang) {
         throw new Error(
-          `TreeSitterResolver.init: ${language.id} WASM failed to load from ${grammar.wasmPath} ` +
+          `TreeSitterResolver.init: ${key} WASM failed to load from ${grammar.wasmPath} ` +
             '(likely an ABI mismatch — rebuild with tree-sitter-cli ^0.26)',
         );
       }
@@ -172,13 +182,13 @@ export class TreeSitterResolver implements SymbolResolver {
         query = new Query(lang, tagsSource);
       } catch (err) {
         throw new Error(
-          `TreeSitterResolver.init: '${language.id}' tags query at ${grammar.tagsScmPath} ` +
+          `TreeSitterResolver.init: '${key}' tags query at ${grammar.tagsScmPath} ` +
             `failed to compile: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      assertDefinitionKinds(query, language.id);
+      assertDefinitionKinds(query, key);
 
-      this.grammars.set(language.id, { parser, query });
+      this.grammars.set(key, { parser, query });
     }
   }
 
@@ -196,7 +206,7 @@ export class TreeSitterResolver implements SymbolResolver {
   async resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]> {
     const startedAt = performance.now();
     const language = languageForPath(query.file);
-    const grammar = language && this.grammars.get(language.id);
+    const grammar = language && this.grammars.get(grammarKeyFor(language));
     if (!language || !grammar) return [];
 
     const candidates = await candidateFiles(
