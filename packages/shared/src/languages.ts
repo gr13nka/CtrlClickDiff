@@ -93,9 +93,6 @@ export const LANGUAGES: readonly Language[] = [
   },
 ];
 
-/** Every extension any registered language claims, in registry order. */
-export const SOURCE_EXTENSIONS: readonly string[] = LANGUAGES.flatMap((lang) => lang.extensions);
-
 /**
  * The language whose extension `path` ends with, or undefined for anything
  * else — a path no registered language claims is not an error, it is a file
