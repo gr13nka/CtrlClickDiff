@@ -171,3 +171,20 @@ build next time.
   `packages/backend/src/resolver/tags/go.scm` produced non-empty captures
   (`definition.function`, `definition.type`, `definition.constant`, `name`)
   against it.
+
+### tree-sitter-rust.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-rust
+- **Pinned commit:** `77a3747266f4d621d0757825e6b11edcbf991ca5` (master, resolved via `git ls-remote --head`)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 1,118,086 bytes (~1.1 MiB)
+- **sha256:** `4f9f7f1c678a4834864a1eadd7005436309cbab151a2a3604dee811920c64996`
+- **Notes:** the grammar lives at the upstream repo root (no subdir). The
+  committed `src/parser.c` at the pinned commit built cleanly against
+  `tree-sitter-cli@0.26.10` without needing the `generate` fallback noted in
+  `build-grammars.sh` -- unlike Kotlin, this grammar's checked-in parser was
+  already current for the 0.26 ABI. Verified against `web-tree-sitter@0.26`:
+  parsed a sample Rust file with zero parse errors, and
+  `packages/backend/src/resolver/tags/rust.scm` produced non-empty captures
+  (`definition.function`, `definition.class`, `definition.type`,
+  `definition.constant`, `name`) against it.

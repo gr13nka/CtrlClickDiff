@@ -68,6 +68,10 @@ export const GRAMMARS: Readonly<Record<string, GrammarAssets>> = {
     wasmPath: resolvePath(REPO_ROOT, 'vendor/tree-sitter-go.wasm'),
     tagsScmPath: resolvePath(here, 'tags/go.scm'),
   },
+  rust: {
+    wasmPath: resolvePath(REPO_ROOT, 'vendor/tree-sitter-rust.wasm'),
+    tagsScmPath: resolvePath(here, 'tags/rust.scm'),
+  },
 };
 
 /**

@@ -222,6 +222,34 @@ export const LANGUAGES: readonly Language[] = [
     //    `function_declaration` on the same row.)
     nonDeclaringLinePrefixes: ['import', 'package', '//', '*'],
   },
+  /**
+   * Rust. Each nonDeclaringLinePrefixes entry argued against THIS language's
+   * own tags file, `resolver/tags/rust.scm` — the standard from the interface
+   * doc above: a line starting with the prefix cannot hold anything that file
+   * captures (function_item, function_signature_item, struct_item, enum_item,
+   * union_item, trait_item, type_item, const_item, static_item,
+   * macro_definition).
+   *
+   *  - `use`  binds a path or alias (`use a::B as C;`) and never itself opens
+   *    one of the captured item kinds — none of them can begin with `use`.
+   *  - `//`   a line comment, which also covers `///` and `//!` doc comments —
+   *    everything after `//` on that line is text, not code.
+   *  - `*`    a block-comment continuation or terminator line (the kind
+   *    `/* ... *\/` spans across) — it cannot itself open a declaration.
+   *
+   * Two prefixes that look tempting and are deliberately EXCLUDED, unlike
+   * Kotlin's `import`/`package`:
+   *  - `#`   would drop real declarations. `#[inline] fn foo() {}` is one
+   *    legal line: the attribute and a captured function_item share it, so
+   *    excluding `#` would filter out an actual definition, not noise.
+   *  - `mod` would too. `mod m { fn f() {} }` opens an inline module and
+   *    declares a captured function_item on the very same line.
+   */
+  {
+    id: 'rust',
+    extensions: ['.rs'],
+    nonDeclaringLinePrefixes: ['use', '//', '*'],
+  },
 ];
 
 /**

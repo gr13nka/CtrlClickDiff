@@ -95,6 +95,12 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'package main\n\nconst Pi = 3\n\ntype Point struct {\n\tX int\n}\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n',
     expectedNames: ['Pi', 'Point', 'Add'],
   },
+  rust: {
+    sample:
+      'pub struct Foo { x: i32 }\npub fn bar() {}\npub const N: i32 = 1;\n' +
+      'pub trait Baz { fn qux(&self); }\n',
+    expectedNames: ['Foo', 'bar', 'N', 'Baz', 'qux'],
+  },
 };
 
 async function main(): Promise<void> {
