@@ -14,7 +14,7 @@ Prebuilt Kotlin tree-sitter grammar, committed because no prebuilt Kotlin
   `tree-sitter-cli@0.26` downloads and uses its own bundled `wasi-sdk`
   (wasi-sdk-29) automatically.
 - **Verified:** loaded with `web-tree-sitter@0.26`, parsed a sample Kotlin
-  file with zero parse errors, and `packages/backend/src/resolver/tags.scm`
+  file with zero parse errors, and `packages/backend/src/resolver/tags/kotlin.scm`
   produced non-empty captures (`definition.class`, `definition.function`,
   `name`) against it.
 - **File size:** 5,812,838 bytes (~5.5 MiB).

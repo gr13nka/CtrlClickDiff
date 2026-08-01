@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     console.error(
       `[smoke] tags.scm not found at:\n  ${TAGS_SCM_PATH}\n` +
         'Copy queries/tags.scm from fwcd/tree-sitter-kotlin into ' +
-        'packages/backend/src/resolver/ as part of the Milestone 0 build step.',
+        'packages/backend/src/resolver/tags/kotlin.scm as part of the Milestone 0 build step.',
     );
     process.exit(1);
   }

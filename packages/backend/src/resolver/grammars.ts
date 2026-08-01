@@ -20,7 +20,7 @@ const REPO_ROOT = resolvePath(here, '../../../..');
 export interface GrammarAssets {
   /** The compiled grammar, committed under vendor/ (no upstream prebuild exists). */
   readonly wasmPath: string;
-  /** The tags query naming this language's declarations, beside this file. */
+  /** The tags query naming this language's declarations: `tags/<grammarKey>.scm`. */
   readonly tagsScmPath: string;
 }
 
@@ -33,7 +33,7 @@ export interface GrammarAssets {
 export const GRAMMARS: Readonly<Record<string, GrammarAssets>> = {
   kotlin: {
     wasmPath: resolvePath(REPO_ROOT, 'vendor/tree-sitter-kotlin.wasm'),
-    tagsScmPath: resolvePath(here, 'tags.scm'),
+    tagsScmPath: resolvePath(here, 'tags/kotlin.scm'),
   },
 };
 
