@@ -36,6 +36,7 @@ declare -A GRAMMARS=(
   [typescript]="https://github.com/tree-sitter/tree-sitter-typescript|75b3874edb2dc714fb1fd77a32013d0f8699989f|typescript"
   [tsx]="https://github.com/tree-sitter/tree-sitter-typescript|75b3874edb2dc714fb1fd77a32013d0f8699989f|tsx"
   [javascript]="https://github.com/tree-sitter/tree-sitter-javascript|58404d8cf191d69f2674a8fd507bd5776f46cb11|"
+  [python]="https://github.com/tree-sitter/tree-sitter-python|26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64|"
 )
 
 usage() {

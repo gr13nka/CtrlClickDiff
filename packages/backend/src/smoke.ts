@@ -83,6 +83,10 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'class Foo { bar() {} }\nconst baz = <div>{1}</div>;',
     expectedNames: ['Foo', 'bar', 'baz'],
   },
+  python: {
+    sample: 'MAX_SIZE = 100\n\nclass Foo:\n    def bar(self):\n        pass\n',
+    expectedNames: ['MAX_SIZE', 'Foo', 'bar'],
+  },
 };
 
 async function main(): Promise<void> {

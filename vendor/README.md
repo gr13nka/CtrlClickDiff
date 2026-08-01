@@ -111,3 +111,25 @@ build next time.
   `packages/backend/src/resolver/tags/javascript.scm` produced the expected
   `definition.class`/`definition.function`/`definition.constant`/`name`
   captures against it (see `pnpm smoke`'s `javascript` row).
+
+### tree-sitter-python.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-python
+- **Pinned commit:** `26855eabccb19c6abf499fbc5b8dc7cc9ab8bc64` (HEAD, resolved
+  via `git ls-remote`)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 460,873 bytes (~450 KiB)
+- **sha256:** `45a3f2c67595661341de5a8c17b0246372183c06112eeec3be9a339fbdedf6bc`
+- **Notes:** built straight from the pinned commit with no `generate` fallback
+  needed -- the committed `src/parser.c` already matched the ABI
+  `tree-sitter-cli@0.26.10` emits. Verified against `web-tree-sitter@0.26`:
+  parsed a sample with a module-level constant, a class and a decorated
+  method with zero parse errors, and
+  `packages/backend/src/resolver/tags/python.scm` produced the expected
+  `definition.constant`/`definition.class`/`definition.function`/`name`
+  captures against it -- including confirming that upstream's own
+  `queries/tags.scm` pattern for module-level assignments (anchored through
+  an `expression_statement` wrapper) captures nothing at all against this
+  build, because `expression_statement` is a `supertype` in the grammar and
+  is elided from the concrete tree; `tags/python.scm` anchors directly to
+  `module` instead (see that file's header comment).

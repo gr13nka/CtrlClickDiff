@@ -162,6 +162,18 @@ export const LANGUAGES: readonly Language[] = [
     // rather than only naming one.
     nonDeclaringLinePrefixes: ['import', '//', '*'],
   },
+  {
+    id: 'python',
+    extensions: ['.py'],
+    // `import`/`from` are keywords — a line beginning with either can only be
+    // an import statement (`import os`) or an import-from (`from x import y
+    // as z`); the latter binds a local alias, not a declaration, so it must
+    // never be read as one. `#` opens a comment that runs to end of line, so
+    // nothing after it can declare either. No `*` here (unlike Kotlin):
+    // Python has no block-comment continuation convention — `#` is the only
+    // comment syntax — so there is no second boilerplate shape to filter.
+    nonDeclaringLinePrefixes: ['import', 'from', '#'],
+  },
 ];
 
 /**
