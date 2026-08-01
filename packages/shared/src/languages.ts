@@ -174,6 +174,31 @@ export const LANGUAGES: readonly Language[] = [
     // comment syntax — so there is no second boilerplate shape to filter.
     nonDeclaringLinePrefixes: ['import', 'from', '#'],
   },
+  {
+    // Same shape as the kotlin row above, and the same admissibility
+    // argument for every prefix: none of these can hold anything
+    // tags/java.scm captures (class/record/enum/interface/annotation
+    // declarations, methods, constructors, field declarators, enum
+    // constants).
+    id: 'java',
+    extensions: ['.java'],
+    nonDeclaringLinePrefixes: [
+      // An `import` statement names a type to bring into scope; it cannot
+      // itself be a class/interface/method/field/enum-constant declaration.
+      'import',
+      // A `package` statement names the enclosing package; same argument.
+      'package',
+      // A line-comment line's first token is the comment marker itself —
+      // nothing after `//` is parsed as code.
+      '//',
+      // A Javadoc/block-comment continuation or terminator line starts with
+      // `*` (not `/*`, for the same reason as Kotlin: a line that OPENS a
+      // block comment can still close it and declare something on the same
+      // line, e.g. `/* note */ class Foo {}`, so only the continuation form
+      // is safe to exclude).
+      '*',
+    ],
+  },
 ];
 
 /**

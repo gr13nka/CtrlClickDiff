@@ -87,6 +87,10 @@ const SAMPLES: Readonly<Record<string, { sample: string; expectedNames: readonly
     sample: 'MAX_SIZE = 100\n\nclass Foo:\n    def bar(self):\n        pass\n',
     expectedNames: ['MAX_SIZE', 'Foo', 'bar'],
   },
+  java: {
+    sample: 'class Foo { int bar; void baz() {} }',
+    expectedNames: ['Foo', 'bar', 'baz'],
+  },
 };
 
 async function main(): Promise<void> {

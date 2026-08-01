@@ -133,3 +133,25 @@ build next time.
   build, because `expression_statement` is a `supertype` in the grammar and
   is elided from the concrete tree; `tags/python.scm` anchors directly to
   `module` instead (see that file's header comment).
+
+### tree-sitter-java.wasm
+
+- **Upstream repo:** https://github.com/tree-sitter/tree-sitter-java
+- **Pinned commit:** `e10607b45ff745f5f876bfa3e94fbcc6b44bdc11` (HEAD, resolved
+  via `git ls-remote`)
+- **tree-sitter-cli version:** `0.26.10`
+- **Wasm byte size:** 416,768 bytes (~407 KiB)
+- **sha256:** `63429f29cf9414acca19093b19c9494a586e020a1fdd57824c535f7f701fee62`
+- **Notes:** the upstream repo ships a committed `src/parser.c` that built
+  cleanly with `tree-sitter-cli@0.26.10 build --wasm` directly -- no
+  `generate` regeneration step was needed (unlike the fallback the build
+  script's comment warns about). `packages/backend/src/resolver/tags/java.scm`
+  is hand-authored rather than copied from upstream's `queries/tags.scm`:
+  upstream's file uses definition kinds (`definition.method`,
+  `definition.interface`) and `@reference.*` captures this resolver's
+  `DEF_KINDS` does not recognise and does not use. Verified against
+  `web-tree-sitter@0.26` and, independently, `tree-sitter-cli@0.26.10 query`
+  against a clone at the pinned commit: a 30-line sample covering all eleven
+  captured declaration forms (class, record, enum, interface,
+  annotation-type, method, constructor, field, enum-constant) produced
+  exactly the expected `@name`/`@definition.*` pairs and nothing else.
