@@ -190,6 +190,33 @@ export class TreeSitterResolver implements SymbolResolver {
 
       this.grammars.set(key, { parser, query });
     }
+
+    // resolve() builds its non-declaring-line filter ONCE, from the clicked
+    // entry's nonDeclaringLinePrefixes, and applies it across every sibling's
+    // candidates (see the `siblings` comment in resolve()). If a .ts/.tsx pair
+    // disagreed on that list, the very same identifier would be filtered
+    // differently depending on which of the two files the click started in —
+    // silently, since the filter only narrows grep results, it never errors.
+    // Caught here instead: every group of LANGUAGES entries sharing an id must
+    // declare element-wise identical nonDeclaringLinePrefixes.
+    for (const id of new Set(LANGUAGES.map((l) => l.id))) {
+      const group = LANGUAGES.filter((l) => l.id === id);
+      const [first, ...rest] = group;
+      if (!first) continue;
+      for (const other of rest) {
+        const agree =
+          other.nonDeclaringLinePrefixes.length === first.nonDeclaringLinePrefixes.length &&
+          other.nonDeclaringLinePrefixes.every((p, i) => p === first.nonDeclaringLinePrefixes[i]);
+        if (!agree) {
+          throw new Error(
+            `TreeSitterResolver.init: LANGUAGES entries sharing id '${id}' declare different ` +
+              `nonDeclaringLinePrefixes (${JSON.stringify(first.nonDeclaringLinePrefixes)} vs ` +
+              `${JSON.stringify(other.nonDeclaringLinePrefixes)}) — resolve() applies the clicked ` +
+              'entry\'s filter across every sibling\'s candidates, so they must agree.',
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -202,6 +229,10 @@ export class TreeSitterResolver implements SymbolResolver {
    * language claims answers empty rather than guessing. That is unreachable
    * today, since the provider is only registered for LANGUAGES ids, but it is
    * a real branch and would otherwise read as a bug.
+   *
+   * Candidates are drawn from every LANGUAGES entry sharing that language's id
+   * (its siblings), not just the clicked entry's own extensions — see the
+   * comment on `siblings` below.
    */
   async resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]> {
     const startedAt = performance.now();
@@ -209,8 +240,20 @@ export class TreeSitterResolver implements SymbolResolver {
     const grammar = language && this.grammars.get(grammarKeyFor(language));
     if (!language || !grammar) return [];
 
+    // Every LANGUAGES entry sharing this file's Monaco id. For a single-entry
+    // language (today, everything) this is just `[language]`, so behavior is
+    // unchanged. It exists for the split case (.ts/.tsx, both Monaco
+    // 'typescript'): a definition can live in either extension, so scoping the
+    // grep to `language.extensions` alone would make a .tsx-only declaration
+    // silently unfindable from a .ts click. `nonDeclaringLinePrefixes` still
+    // comes from the clicked entry only — init() boot-asserts every sibling
+    // group agrees on it, which is what makes that safe rather than a silent,
+    // click-origin-dependent filter.
+    const siblings = LANGUAGES.filter((l) => l.id === language.id);
+
     const candidates = await candidateFiles(
-      repoRoot, revision, query.name, language.extensions, language.nonDeclaringLinePrefixes,
+      repoRoot, revision, query.name,
+      siblings.flatMap((l) => l.extensions), language.nonDeclaringLinePrefixes,
     );
     const grepMs = performance.now() - startedAt;
     // How many of the candidates still have to be read and parsed. Counted
@@ -236,7 +279,21 @@ export class TreeSitterResolver implements SymbolResolver {
     // is synchronous WASM on the event loop. The await on each subprocess is
     // the only thing yielding it; measured max loop lag as written is 27ms.
     const perFile = await mapWithLimit(ordered, CANDIDATE_READ_CONCURRENCY, async (path) => {
-      const symbols = await this.symbolsFor(repoRoot, revision, path, grammar);
+      // A sibling's extension can name a file that is a DIFFERENT LANGUAGES
+      // entry than the one clicked (the .tsx case) — so this looks up each
+      // candidate's OWN grammar by ITS OWN path, not the clicked file's. Both
+      // lookups are expected to succeed for anything `siblings` produced, but
+      // a single candidate must never abort the whole pool: a miss just
+      // answers "no hits from this file" instead of throwing mid-pool.
+      const fileLanguage = languageForPath(path);
+      const fileGrammar = fileLanguage && this.grammars.get(grammarKeyFor(fileLanguage));
+      if (!fileLanguage || !fileGrammar) return [];
+
+      // The cache key stays (repoRoot, revision, path) — untouched by any of
+      // this. `path` already determines which grammar parses it (that's what
+      // `fileLanguage` just derived), so the key still names immutable
+      // content; it never needed the grammar as an input, only as a tool.
+      const symbols = await this.symbolsFor(repoRoot, revision, path, fileGrammar);
       return symbols.get(query.name) ?? [];
     });
 
