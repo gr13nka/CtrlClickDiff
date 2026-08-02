@@ -15,6 +15,20 @@
 #   feature/wide (2 commits) exercises a broad change (12 .kt files across 5
 #   directories) and, in LongService.kt, a 2-line change buried in a ~120-line
 #   file so hideUnchangedRegions has something to collapse.
+#   feature/polyglot (2 commits) is the only branch in either fixture repo that
+#   is not all-Kotlin, and exercises three things nothing else here can: (a) a
+#   mixed-language preview — one selection, four cards, four Monaco languages
+#   (tools/report.py, web/render.ts, web/App.tsx, cmd/hello.go); (b) per-file-
+#   language scoping — `render` is declared in BOTH tools/report.py and
+#   web/render.ts on purpose, so a Ctrl+click on `render` in tools/cli.py
+#   (which calls it) must resolve only the Python definition, never the
+#   TypeScript one; (c) the .tsx -> .ts cross-entry sibling case — `render`
+#   clicked in web/App.tsx (grammar tsx) must still find web/render.ts's
+#   definition (grammar typescript), because TreeSitterResolver.resolve draws
+#   candidates from every LANGUAGES entry sharing the clicked file's Monaco id,
+#   and .tsx/.ts are both `typescript`. Appended after main's SHA-frozen
+#   history as a new branch rather than folded into an existing one, so main
+#   and the two other feature branches above stay exactly as they were.
 #
 # Repo B at $HOME/ccd-sample-repo-2 (5 commits, 3 branches) is deliberately
 # small and deliberately unlike repo A (package com.acme.inventory, different
@@ -516,6 +530,95 @@ sed -i \
 
 git add "$WIDE_DIR"
 git commit -q -m "Rename log() to trace() package-wide; reweight priorityScore()"
+
+git checkout -q main
+
+# ---------------------------------------------------------------------------
+# Branch feature/polyglot, commit 1: one file per non-Kotlin language this tool
+# now resolves — tools/report.py, web/render.ts, web/App.tsx, cmd/hello.go.
+# `render` is declared in BOTH report.py and render.ts on purpose (see the
+# header comment above); nothing calls either yet, so this commit alone is
+# just the mixed-language-preview case, (a).
+# ---------------------------------------------------------------------------
+git checkout -q -b feature/polyglot main
+
+export GIT_AUTHOR_DATE="2024-01-08T00:00:00+00:00"
+export GIT_COMMITTER_DATE="2024-01-08T00:00:00+00:00"
+
+mkdir -p tools web cmd
+
+cat > tools/report.py <<'EOF'
+HEADER = "Sample report"
+
+def render(rows):
+    return "\n".join(rows)
+EOF
+
+cat > web/render.ts <<'EOF'
+export function render(rows: string[]): string {
+  return rows.join('\n');
+}
+EOF
+
+cat > web/App.tsx <<'EOF'
+import { render } from './render';
+
+export function App() {
+  return <pre>{render(['a', 'b'])}</pre>;
+}
+EOF
+
+cat > cmd/hello.go <<'EOF'
+package cmd
+
+func Greet(name string) string {
+	return "Hello, " + name
+}
+EOF
+
+git add tools/report.py web/render.ts web/App.tsx cmd/hello.go
+git commit -q -m "Add one file per non-Kotlin language: report.py, render.ts, App.tsx, hello.go"
+
+# ---------------------------------------------------------------------------
+# Branch feature/polyglot, commit 2: A tools/cli.py (calls report.render(),
+# case (b) — a Ctrl+click on render() here must resolve only the Python
+# report.py, never the TypeScript render.ts, because TreeSitterResolver scopes
+# candidates to the clicked file's language id and Python/TypeScript are
+# different ids); M web/App.tsx (still calls render() at the same line, case
+# (c) — a .tsx click must still find the .ts sibling's definition); M
+# cmd/hello.go (adds a main() that calls Greet()).
+# ---------------------------------------------------------------------------
+export GIT_AUTHOR_DATE="2024-01-09T00:00:00+00:00"
+export GIT_COMMITTER_DATE="2024-01-09T00:00:00+00:00"
+
+cat > tools/cli.py <<'EOF'
+from tools import report
+
+print(report.render(["a", "b"]))
+EOF
+
+cat > web/App.tsx <<'EOF'
+import { render } from './render';
+
+export function App() {
+  return <pre>{render(['a', 'b', 'c'])}</pre>;
+}
+EOF
+
+cat > cmd/hello.go <<'EOF'
+package cmd
+
+func Greet(name string) string {
+	return "Hello, " + name
+}
+
+func main() {
+	println(Greet("World"))
+}
+EOF
+
+git add tools/cli.py web/App.tsx cmd/hello.go
+git commit -q -m "Add cli.py calling render(); wire Greet() into a main()"
 
 git checkout -q main
 
