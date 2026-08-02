@@ -1,4 +1,4 @@
-// Milestone 3 — Kotlin definition provider. This is the feature's "heart":
+// Milestone 3 — the definition provider. This is the feature's "heart":
 // it's what turns Ctrl+click into an inline peek and F12 into a cross-file
 // jump. See peekdiff-mvp-iterative-wind.md, "Milestone 3 — Tree-sitter brain".
 //

@@ -104,7 +104,7 @@ export interface Preview {
    * commit, and the first parent of the oldest selected commit.
    *
    * This exists for one caller and would otherwise be dead weight: a cross-file
-   * jump can land on any `.kt` file at the revision, not only on one the
+   * jump can land on any source file at the revision, not only on one the
    * selection changed (the resolver indexes the whole tree), and such a path has
    * no `PreviewFile` to read revisions from. Do not use it for a path that does
    * appear in `files` — that file's own pair is narrower and is the honest one.

@@ -139,7 +139,7 @@ export const api = {
   },
 
   /**
-   * GET /api/preview?shas=<csv> -> the changed .kt files of a *selection* of
+   * GET /api/preview?shas=<csv> -> the changed source files of a *selection* of
    * commits, each with the revision pair its diff is computed at.
    *
    * One sha is the ordinary single-commit review; several is a ghost squash.

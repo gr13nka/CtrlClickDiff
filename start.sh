@@ -90,10 +90,10 @@ trap cleanup EXIT
 pnpm dev:backend &
 pids+=("$!")
 
-# Wait for the port before starting the frontend. The backend loads the Kotlin
-# WASM grammar and registers REPO_ROOT *before* it listens, and both of those
-# are fatal on failure — so a URL printed at this point can easily belong to a
-# process that is already exiting.
+# Wait for the port before starting the frontend. The backend loads every
+# registered grammar (12 wasms) and registers REPO_ROOT *before* it listens,
+# and both of those are fatal on failure — so a URL printed at this point can
+# easily belong to a process that is already exiting.
 for _ in {1..150}; do
   port_open && break
   kill -0 "${pids[0]}" 2>/dev/null || {

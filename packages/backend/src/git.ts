@@ -192,7 +192,7 @@ export async function resolveSha(repoRoot: string, rev: string): Promise<string>
   return stdout.trim();
 }
 
-/** One commit of a span: its first parent, and the `.kt` files it touched. */
+/** One commit of a span: its first parent, and the source files it touched (isSourcePath). */
 export interface CommitChanges {
   /**
    * First parent's SHA, or the empty-tree SHA for a root commit. First parent
@@ -227,7 +227,7 @@ export async function orderCommits(repoRoot: string, shas: string[]): Promise<st
 /**
  * Every commit the selection `orderedShas` spans — the selected commits
  * themselves plus everything between them — with each one's first parent and
- * changed `.kt` files, keyed by full SHA and iterating newest-first.
+ * changed source files (isSourcePath), keyed by full SHA and iterating newest-first.
  *
  * `orderedShas` must be newest-first; `orderCommits` is what establishes that.
  * The commits in between are as load-bearing as the selected ones: they are the

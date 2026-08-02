@@ -1,8 +1,8 @@
 # CtrlClickDiff
 
-**A local, read-only Kotlin commit reviewer that keeps go-to-declaration *inside* the diff.**
+**A local, read-only commit reviewer that keeps go-to-declaration *inside* the diff.**
 
-Pick a commit — or several — see a side-by-side diff of the `.kt` files it changed, and
+Pick a commit — or several — see a side-by-side diff of the source files it changed, and
 **Ctrl+click any symbol to open its declaration in a peek widget right inside the diff.**
 Nothing opens in a separate tab. You never lose your place in the review.
 
@@ -18,6 +18,7 @@ inline, without leaving the diff. Esc closes it and puts you back.*
 - [The problem it solves](#the-problem-it-solves)
 - [What it looks like](#what-it-looks-like)
 - [Features](#features)
+- [Supported languages](#supported-languages)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Run it](#run-it)
@@ -34,7 +35,7 @@ inline, without leaving the diff. Esc closes it and puts you back.*
 
 ## The problem it solves
 
-Reviewing a Kotlin commit means constantly asking *"what is this thing?"* — and today you have to
+Reviewing a commit means constantly asking *"what is this thing?"* — and today you have to
 choose which half of the answer you get:
 
 - **Plain diff viewers** (GitHub, `git diff`, most git GUIs) show the change but have no idea what
@@ -74,7 +75,7 @@ you can review several commits as one diff.
 - **Esc** closes the peek and returns you exactly where you were. **F12** opens the declaration's
   file properly, if you'd rather go there.
 - Works on both sides of the diff, and in inline mode as well as side-by-side.
-- The symbol index is built from **every `.kt` file at the revision you're reviewing**, so it finds
+- The symbol index is built from **every source file at the revision you're reviewing**, so it finds
   declarations as that commit left them — not as they happen to be on disk now.
 
 ### Review a *selection* of commits — "ghost squash"
@@ -94,7 +95,7 @@ you can review several commits as one diff.
 - **Branch picker** — local and remote-tracking branches, grouped, with the checked-out one marked.
   Copes with a detached HEAD.
 - **Commit palette** — the newest 100 commits on the selected ref, searchable.
-- **Changed-file tree** — `.kt` files only, with `A` / `M` / `D` status badges, and single-child
+- **Changed-file tree** — source files only, with `A` / `M` / `D` status badges, and single-child
   directory chains collapsed so a deep package is one row instead of six.
 
 ### The diff itself
@@ -118,6 +119,29 @@ you can review several commits as one diff.
 - If you're sitting on the newest commit, it follows along. If you're reviewing an older commit — or
   a multi-commit selection you assembled by hand — it leaves your selection alone.
 
+## Supported languages
+
+| Language | Extensions | Grammar |
+|---|---|---|
+| Kotlin | `.kt` | tree-sitter-kotlin |
+| TypeScript | `.ts` | tree-sitter-typescript |
+| TypeScript (JSX) | `.tsx` | tree-sitter-typescript (`tsx`) |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | tree-sitter-javascript |
+| Python | `.py` | tree-sitter-python |
+| Java | `.java` | tree-sitter-java |
+| Go | `.go` | tree-sitter-go |
+| Rust | `.rs` | tree-sitter-rust |
+| C | `.c` | tree-sitter-c |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.h` | tree-sitter-cpp |
+| C# | `.cs` | tree-sitter-csharp |
+| Ruby | `.rb` | tree-sitter-ruby |
+
+Eleven languages, twelve grammars: TypeScript's `.tsx` files parse with a second grammar
+(`tsx.wasm`), because the plain TypeScript grammar cannot parse JSX, even though `.ts` and `.tsx`
+are one Monaco language and share one declarations query. `.h` is claimed by C++ alone, not C —
+see `packages/shared/src/languages.ts` for why. Ctrl+click only resolves within a file's own
+language; it never follows an import across languages.
+
 ## Requirements
 
 | | |
@@ -129,7 +153,7 @@ you can review several commits as one diff.
 | **OS** | Linux or macOS (Windows via WSL; `start.sh` is a bash script) |
 
 **No native toolchain is needed** — no JDK, no Kotlin compiler, no Android Studio, no C compiler.
-The Kotlin grammar ships prebuilt as WebAssembly at `vendor/tree-sitter-kotlin.wasm`.
+Every grammar ships prebuilt as WebAssembly under `vendor/` — see the table above.
 
 Why git 2.31: the ref watcher uses `git rev-parse --path-format`, and listing a merge commit's files
 needs `git log --diff-merges=first-parent`. Both landed in 2.31.
@@ -188,11 +212,14 @@ pnpm install
 pnpm smoke
 ```
 
-This asserts the Kotlin WebAssembly grammar loads and that its ABI matches. You should see:
+This asserts every registered grammar's WebAssembly loads with a matching ABI, that its tags query
+compiles, and that it captures its sample correctly — a per-grammar matrix, not one check. You
+should see it run through all twelve grammar keys and end with:
 
 ```
-[smoke] Kotlin language loaded OK
-[smoke] OK — tags.scm captured both 'Foo' (class) and 'bar' (function)
+[smoke] kotlin OK — captured [Foo, bar]
+...
+[smoke] all 12 grammars OK
 ```
 
 Optionally, type-check all three packages:
@@ -231,7 +258,7 @@ branches and commits are all switchable inside the app.
 
 ## Try it in two minutes
 
-The repo ships a generator for two throwaway Kotlin repos, so you can watch every feature work
+The repo ships a generator for two throwaway repos, so you can watch every feature work
 without pointing it at anything of your own:
 
 ```bash
@@ -266,7 +293,7 @@ The review loop follows the breadcrumb in the header, left to right:
    and the checked-out branch is marked.
 3. **Pick a commit.** Click the third chip for the searchable commit palette. To review several
    commits as one diff, flip **Ghost squash** and tick the ones you want.
-4. **Scroll.** Every changed `.kt` file is already there, one below the next; clicking a file in the
+4. **Scroll.** Every changed source file is already there, one below the next; clicking a file in the
    sidebar jumps to it.
 5. **Ctrl+click any symbol** to peek its declaration inline.
 
@@ -335,10 +362,11 @@ pick one. If the picker itself shows nothing, check `CCD_BROWSE_ROOT`: it defaul
 only ever lists **directories**.
 
 **Ctrl+click does nothing.**
-Resolution is name-based over your own Kotlin at that revision. It won't jump into the standard
-library or third-party dependencies, won't follow imports, and won't pick between overloads. If the
-symbol *is* declared in a `.kt` file in the same repo and nothing happens, check you're holding Ctrl
-(Cmd on macOS) — a plain click just moves the cursor.
+Resolution is name-based over your own code at that revision, in a [supported
+language](#supported-languages). It won't jump into the standard library or third-party
+dependencies, won't follow imports, and won't pick between overloads. If the symbol *is* declared
+in a source file in the same repo and nothing happens, check you're holding Ctrl (Cmd on macOS) —
+a plain click just moves the cursor.
 
 **New commits aren't appearing.**
 Live updates need the SSE stream to be alive; if the backend restarted while the page stayed open,
@@ -346,20 +374,21 @@ reload the page. Also note the picker follows the tip only when your selection i
 that *was* the tip — a hand-built multi-commit selection is deliberately left alone.
 
 **`pnpm smoke` fails.**
-The Kotlin WASM grammar didn't load. Confirm `vendor/tree-sitter-kotlin.wasm` exists and that
-`node --version` is `v22.x`; see `vendor/README.md` to rebuild the grammar.
+A grammar's WASM didn't load — the failure names which one. Confirm the file exists under
+`vendor/` and that `node --version` is `v22.x`; see `vendor/README.md` to rebuild it.
 
 ## What it deliberately does not do
 
 Stated up front so it isn't a disappointment later:
 
-- **Only Kotlin.** It is the only language that ships. Which extensions are reviewed and which
-  grammar answers for them is a one-row table now (`packages/shared/src/languages.ts`) rather than a
-  dozen scattered literals, but adding a row also means vendoring a ~5 MB grammar and a tags query,
-  and nobody has.
+- **Eleven languages, and it's still a closed list.** Kotlin, TypeScript (`.ts` and `.tsx`, via two
+  grammars), JavaScript, Python, Java, Go, Rust, C, C++, C# and Ruby — see the table above. Which
+  extensions are reviewed and which grammar answers for them is one row per language
+  (`packages/shared/src/languages.ts`) rather than scattered literals, but adding a row still means
+  vendoring a multi-megabyte grammar, authoring a tags query and adding a smoke sample.
 - **Not semantically accurate.** Resolution is by **name**: no overload resolution, no import
   following, no jumps into the stdlib or libraries. It's built for "jump to the declaration in my own
-  Kotlin", and it tells you when a name is ambiguous.
+  code", and it tells you when a name is ambiguous.
 - **No editing, staging, or committing.** It's a reviewer, not a git client — see below.
 - **No auth and no remote access.** It binds to `127.0.0.1` and assumes one trusted local user.
 - **No light mode** — dark only.
@@ -375,10 +404,10 @@ This is a **guarantee, not an aspiration**. The code has no path to write or del
   commands. The only subcommands invoked anywhere are `log`, `rev-parse`, `for-each-ref`, `show`
   and `grep` — all read-only. Nothing calls `checkout`, `reset`, `clean`, `commit`, `push`, or
   anything that moves a ref.
-- **The backend never writes the filesystem.** Its entire fs surface is `readFile` (the WASM grammar,
-  once at boot), `realpath`/`stat` to validate a repo path, `readdir` for the picker, `existsSync`,
-  and `fs.watch` for the change stream. There is no `writeFile`, `unlink`, `rm`, `rename` or `mkdir`
-  anywhere in the backend.
+- **The backend never writes the filesystem.** Its entire fs surface is `readFile` (the WASM
+  grammars and tags queries, once at boot), `realpath`/`stat` to validate a repo path, `readdir`
+  for the picker, `existsSync`, and `fs.watch` for the change stream. There is no `writeFile`,
+  `unlink`, `rm`, `rename` or `mkdir` anywhere in the backend.
 - **Directory listing is sandboxed.** `GET /api/browse` is confined to `CCD_BROWSE_ROOT` and returns
   **directory names only** — never file names, contents, sizes or timestamps. Dotfiles are skipped
   and symlinked directories are excluded outright, so a listing can't dangle a path out of the
@@ -394,16 +423,17 @@ This is a **guarantee, not an aspiration**. The code has no path to write or del
 Two processes and a swappable "brain":
 
 - **Frontend** (`packages/frontend`) — TypeScript + Vite +
-  [Monaco](https://microsoft.github.io/monaco-editor/)'s `DiffEditor`. A
-  `registerDefinitionProvider('kotlin', …)` calls the backend and returns a `Location`, which Monaco
-  renders as an inline peek. Kotlin syntax highlighting is built into Monaco.
+  [Monaco](https://microsoft.github.io/monaco-editor/)'s `DiffEditor`. A definition provider
+  registered per language (`defprovider.ts`) calls the backend and returns a `Location`, which
+  Monaco renders as an inline peek. Syntax highlighting for every supported language is built into
+  Monaco.
 - **Backend** (`packages/backend`) — TypeScript + Fastify, serving git content (`git show`) and a
   symbol index over HTTP.
 - **The brain** (`packages/backend/src/resolver`) — a `TreeSitterResolver` behind the one-method
   `SymbolResolver` interface in `packages/shared`. To answer "where is this declared?" it asks
   `git grep` which files mention the identifier at all, then parses just those with
-  [tree-sitter](https://tree-sitter.github.io/) (WASM) plus a Kotlin grammar. The work is
-  proportional to the identifier rather than to the repository: on a 2,646-file repo a typical
+  [tree-sitter](https://tree-sitter.github.io/) (WASM) plus that file's own language's grammar. The
+  work is proportional to the identifier rather than to the repository: on a 2,646-file repo a typical
   Ctrl+click reads about seven files instead of all of them. It used to index the whole revision up
   front, which cost 11.5s and ~320 MB *per revision* before the first answer. The interface keeps it
   swappable for a future ctags- or LSP-backed resolver.
@@ -443,15 +473,15 @@ packages/backend    Fastify; git.ts, preview.ts, repos.ts, browse.ts, watch.ts,
                     resolver/TreeSitterResolver.ts
 packages/frontend   Vite + Monaco; shell.ts, diff.ts, defprovider.ts, and one module per
                     piece of UI. All CSS is inline in index.html
-vendor/             prebuilt tree-sitter-kotlin.wasm (+ how to rebuild it)
-fixtures/           make-sample-repo.sh — the reproducible Kotlin test repos
+vendor/             12 prebuilt grammar wasms + build-grammars.sh (how to rebuild them)
+fixtures/           make-sample-repo.sh — the reproducible test repos
 docs/               the screenshots used in this file
 m1-spike/           a throwaway CDN spike that proved peek-in-diff before any real code
 ```
 
 ```bash
 pnpm typecheck                      # tsc --noEmit, strict, all three packages
-pnpm smoke                          # asserts the Kotlin WASM loads with a matching ABI
+pnpm smoke                          # asserts every registered grammar loads with a matching ABI
 bash fixtures/make-sample-repo.sh   # regenerate the fixture repos
 ```
 
