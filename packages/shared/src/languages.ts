@@ -9,12 +9,22 @@
 // and would fail **silently at runtime** if one drifted are the same hazard
 // class as splitting modelUri/parseModelUri across two files.
 //
-// Deliberately ONE entry. Adding a language is a row here plus a grammar in
-// the backend's grammars.ts; that is the seam, and shipping a second grammar is
-// the trigger to revisit whatever this file assumes.
+// This file held ONE entry (kotlin) for a long time, with "a second grammar"
+// named as the revisit trigger. The trigger fired and the seam held: a language
+// is a row here, an assets row in the backend's grammars.ts, a tags file, a
+// vendor/ wasm with provenance, and a smoke sample — nothing else moved. What
+// the second grammar actually forced is the optional `grammar` field below
+// (one Monaco id, two tree-sitter grammars: the .ts/.tsx case).
+//
+// Row ORDER is load-bearing in one way: `languageForPath` is first-match-wins,
+// so if two entries ever claim overlapping extension suffixes, the earlier row
+// takes the path. Today every extension set is disjoint (`.h` is claimed by
+// cpp alone, deliberately — see that row), so order is only convention: keep
+// new rows appended at the end.
 //
 // Filesystem paths live in packages/backend/src/resolver/grammars.ts, keyed by
-// the ids below, because this module is imported by the browser.
+// each row's grammar key (`grammarKeyFor`), because this module is imported by
+// the browser.
 
 export interface Language {
   /**
@@ -84,7 +94,7 @@ export interface Language {
   readonly nonDeclaringLinePrefixes: readonly string[];
 }
 
-/** Every language this tool reviews. One entry, on purpose — see the file header. */
+/** Every language this tool reviews — the seam a new language is a row on. */
 export const LANGUAGES: readonly Language[] = [
   {
     id: 'kotlin',
