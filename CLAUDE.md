@@ -21,7 +21,9 @@ packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (wha
                     resolver/TreeSitterResolver.ts (grep for candidates, parse only those)
                     resolver/grammars.ts (grammar asset paths, keyed by grammar key)
                     resolver/tags/<key>.scm (one hand-authored declarations query per grammar)
-packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
+packages/frontend   Vite + Monaco. shell.ts (all UI state)
+                    band.ts (the review column — cards, plus the summary above them
+                      and the empty state that replaces them)
                     diff.ts (one file's editor) defprovider.ts api.ts
                     peekscope.ts (the review, as seen by peek's candidate list)
                     deeplink.ts (the review as a URL — parse and serialize, an inverse pair)
@@ -75,6 +77,26 @@ a single check: for each it loads the wasm, compiles its `tags.scm`, and parses 
 asserting the capture names it promises actually appear. A registered language with no `SAMPLES`
 row is itself a smoke failure, naming the language — a grammar nothing exercises can break, or ship
 broken, without this ever noticing.
+
+**Anything about how the diff *looks* has to be measured in a browser, and the fixture repos will
+lie to you.** Their Kotlin lines are short enough to fit any pane, so the single largest problem in
+the reading surface — every line of real code clipped at the pane edge — was invisible in all three
+committed screenshots. Audit against a real repository (this one works: register it and deep-link a
+few of its own commits) and read the numbers rather than the impression:
+
+- `.view-line` truncation is **not** `scrollWidth`, which returns a 1e6 sentinel on a Monaco line.
+  Measure where the line's last span actually ends against the scrollable viewport's right edge.
+- `.editor.original` exists in the DOM in single-pane mode too — Monaco keeps both inner editors and
+  collapses one — so its **width** is the question, never its presence.
+- Wait for a `.line-insert`/`.line-delete` decoration, not just `.monaco-diff-editor`: the editor
+  element exists before the diff is computed, and a screenshot taken in that window shows an
+  undecorated file that looks exactly like a regression. This produced a confident false failure
+  while auditing, on top of the three traps already listed below.
+- `getComputedStyle` rounds alpha to 2dp (`0.1255` → `"0.13"`), so a contrast check reading colours
+  back from the DOM is slightly pessimistic against the 8-digit hex the theme declares.
+
+The blur and greyscale passes are the ones that catch misallocated weight, and they are worth more
+here than any single ratio: blur the screenshot and the dominant shape must be the changed lines.
 
 **Ctrl+click latency has a recorded baseline; beat it or explain why.** Measured against
 `~/lets-plot` (2646 `.kt`, 9.6 MB, blobless clone), backend at `REPO_ROOT=~/lets-plot`, one
@@ -250,11 +272,80 @@ unaffected (it isn't the worker), `ts.worker` never spawns with everything off, 
 
 **The four `diffEditor.*Background` colours must be translucent 8-digit hex.** Monaco registers
 them `needsTransparency`; an opaque tint paints over selection and search highlights inside a
-changed line. The word-diff tint is 10% rather than the 15% that reads best alone, because it
-stacks on the line tint and the darkest syntax colour otherwise falls below WCAG AA (4.34:1).
+changed line.
+
+**The diff tint is a constrained optimum with almost no slack, and three walls hold it there.**
+Line 13% / word 6% puts an added line at 1.20:1 against the canvas and a removed one at 1.14:1 —
+up from 1.11 and 1.07, and that ~8% is the whole available win. (1) `comment` `#8b949e` is the
+darkest token in the theme and only 5.0:1 on bare canvas, and it must stay ≥4.5:1 read *through*
+line and word tints stacked; swept in 1/255 steps the frontier is line `0x2c` / word `0x07`, and
+past line `0x2f` **no** word tint keeps AA. (2) Raising the line tint *costs* the word diff, which
+is read against the line under it: line `0x26`/word `0x0a` buys a 1.25:1 line and collapses the
+word highlight to 1.07:1, which is not a highlight. (3) The gutter looks like free contrast and is
+not — see the next paragraph. Two dead ends worth not re-walking: more alpha fails AA, and **no**
+alpha makes added and removed distinguishable in greyscale (green and red at equal alpha land at
+the same luminance — 1.03:1 apart at 8%, still only 1.13:1 at 28%), so the `+`/`−` glyph is the
+non-colour carrier and has to stay. The one lever that would open real headroom is lightening
+`comment`, which changes how the theme reads and needs its own commit. For calibration: GitHub
+dark's own added line is also 1.20:1 — a diff tint simply *is* a low-contrast signal, so a
+"raise it to 3:1" instinct is wrong.
+
+**`diffEditorGutter.*` stays at 15%, and the reason is only visible on an added file.** Nothing but
+the line number `#6e7681` sits on it, and it takes 20% before that drops under 3:1 — so it reads as
+free contrast. It is not: in single-pane mode Monaco renders the empty side as one degenerate line
+and paints its status down the full height of the 42px original column, so an all-**added** file
+carries a red stripe its whole length (correct on a deleted file, false on an added one). Raising
+the gutter amplifies that false signal faster than it helps the modified files it was meant for,
+which the line wash already carries. Found by the blur test, not by reading the code.
 
 **`diffEditor.unchangedRegionBackground` defaults to `sideBar.background`**, a workbench colour
 standalone Monaco never registers. Unset, the collapsed-region bars render unstyled.
+
+**`overflow: hidden` on a card is what stopped its sticky header sticking, for the whole life of
+the band.** Any overflow other than `visible` gives an element a scrolling box, and a sticky
+descendant sticks within its *nearest* such box — so `.ccd-card { overflow: hidden }` made the card
+its own header's scrollport, and a card never scrolls, so `top: 0` resolved to the card's own top
+and the header rode away with it. Measured before the fix, header top at scrollTop 400/1400/2400:
+**−343 / −1343 / −2343**, never pinned once, while both the README and the rule's own comment
+claimed it worked. The clip that rounds the editor's corners now lives on `.ccd-card-body`, which is
+not an ancestor of the header. Two related facts: the header's `top` is the band's padding
+**negated** (`--ccd-band-pad`, because a scroll container paints scrolled content over its padding,
+so pinning at the content edge leaves a 12px strip of the previous lines showing above it), and
+Chrome resolves a sticky offset against the scroll container's **content** box — measured, `top: 0`
+pinned at band-top + padding, not at band-top.
+
+**An added or deleted file must not render side by side.** There is no "before" to compare, so one
+pane holds nothing and Monaco fills it with diagonal hatch: measured on `deeplink.ts`, **1,195,936
+px² of hatch against 1,141,200 px² of visible card**, with all the content squeezed into the other
+633px pane. `viewOptions` therefore takes the file's status, and `liveEditors` is a `Map` from
+editor to status rather than a `Set` — that pairing is the point, because `applyViewOptions` would
+otherwise push a bare `renderSideBySide: sideBySide` over the override on the next toggle and put
+the empty pane back. After: hatch is 3.7% of the card. Verify both directions when touching this —
+an added file must hold 42/1224 across a full Split→Inline→Split trip, and a modified file must
+still swing 633/633 ↔ 42/1224.
+
+**Word wrap is on by default because the cap plus a sidebar leaves 633px a pane.** `--ccd-content-w-max`
+used to claim it was "wide enough that neither pane wraps"; true of the fixture repos, false of real
+code — this project's own `shell.ts` has 899px lines, so **113 of 113** rendered lines of
+`deeplink.ts` were clipped, and Monaco's horizontal scrollbar is `opacity: 0` until hovered so
+nothing said text was missing. The consequence to know: content height now depends on pane *width*,
+so dragging the sidebar re-wraps and re-fires `onDidContentSizeChange`. That is not a loop —
+measured across a full drag of the clamp and back, 20 writes, 14 distinct heights,
+4667px → 5275px → back to exactly 4667px, zero further writes after release — because the guard in
+`syncHeight` is against height→height and `scrollBeyondLastLine: false` keeps content height
+independent of viewport height.
+
+**Per-file churn comes from Monaco, not git, and will not equal `git diff --numstat`.**
+`FileDiff.churn()` reads `getLineChanges()`, which is the same list the `.line-insert` tinting is
+drawn from — so the header agrees with the coloured lines under it, which is the property that
+matters. On `shell.ts` it reports +98/−14 where *every* git algorithm (myers, minimal, patience,
+histogram, with and without the indent heuristic) says +96/−12: both are valid diffs, drawn with
+different hunk boundaries. Matching git would print a number contradicting the pixels. Two counting
+bugs that are already fixed and would come back if the clamp is removed: a text model counts the
+empty string after a trailing newline as a line and git does not (a whole-file add read "+113" for
+112 lines), and `loadModels` hands an added file `''` for its original — one empty line — so the
+same file read "−1", the absence of the file counted as a deletion. Both fall out of clamping each
+side to its own real line count, which is a true invariant rather than two special cases.
 
 **`onDidUpdateDiff` is not "the diff is ready".** It is `Event.fromObservableLight` over the diff
 model, so it fires on every transition including `result → undefined` during a `setModel`. The
@@ -734,6 +825,35 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
 - **Tree collapse state is in memory only.** A stale persisted collapse can hide a changed file
   from a review, which is a correctness hazard. Sidebar width *is* persisted; that is a
   preference, not a view of the data.
+- **What the sidebar reports must never outshout what the diff shows.** `activePath` is *reported*
+  by the band's IntersectionObserver, not chosen by a click, and it used to render as a full-bleed
+  accent fill — 4.08:1 against the canvas, against a diff at 1.20:1, so a passive scroll-position
+  marker carried 3.5× the contrast of the thing it pointed at and was the strongest shape on a
+  blurred screenshot. Now a subtle surface plus a 2px inset accent rule: ratio 1.0×, and the accent
+  is free to mean "something changed here". The blur test is what decides this, not an opinion —
+  squint at it, and the dominant shape must be the changed lines.
+- **Every row of the sidebar is a control, both kinds.** `dirItem` had `role=button` + `tabIndex 0`
+  from the start and `fileRow` did not, so the tab order could expand a directory and then reach
+  nothing inside it — the destinations of the app's primary navigation were mouse-only. Making a row
+  a control also makes its accessible name audible, which is why the one-letter badge is
+  `aria-hidden` and the row is labelled "`<path>`, added": the letter is a glyph, and a glyph is a
+  poor thing to hear. The badge stays one letter, because that is the entire reason it is one.
+  Deliberately *not* a full `role=tree` with roving tabindex — matching the sibling pattern is what
+  removes the blocker; tree semantics are their own change.
+- **The empty state lives in the band and carries an action.** "No reviewable source files changed"
+  used to be one muted 12px line in the corner of the sidebar beside 1290×850 of empty canvas —
+  easy to miss, and it named a fault without a remedy, so it read as a broken tool. It is now a
+  block where the reader is looking, with why it happened and a button into the commit palette
+  (`BandHooks.onChooseCommits`, a hook because the palette needs state only the shell has). The
+  languages are still named as a *category*: `641f86e` removed the extension list because a sentence
+  spelling out a dozen suffixes stops being a sentence, and moving the sentence did not change that.
+- **`setStatus` carries a severity, and the colour is the redundant half.** One slot holds
+  "Loading commits…" and "Error loading diff: …", and at one colour a dead request looked exactly
+  like a slow one. Errors render in `--ccd-danger`; every message that passes `'error'` already
+  begins with the word, so the red confirms rather than carries. The element is `role=status`
+  (polite, not assertive — this slot carries routine progress and would otherwise interrupt on
+  every fetch). Check *recovery* when touching it: a sticky error class leaves the next "Loading…"
+  painted as a failure.
 - **An out-of-review peek row is greyed, not labelled, and that was measured rather than chosen.**
   A "· not in this commit" suffix was written and taken out: the peek's tree pane is ~150px, a
   filename needs ~52px and the note ~95px, so the two cannot both render. Pinning the note clipped

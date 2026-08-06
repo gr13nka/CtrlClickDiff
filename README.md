@@ -53,9 +53,10 @@ CtrlClickDiff gives you both at once: a real diff, with language-aware navigatio
 
 ![Every changed file stacked in one scroll, unchanged regions collapsed](docs/screenshot-wide.png)
 
-A wide change on a feature branch. **Every changed file is stacked in one continuous scroll**, next
-file directly below the last, each under a sticky header naming it — so reviewing twelve files is
-one gesture, not twelve. The sidebar collapses the deep Kotlin package
+A wide change on a feature branch. It opens by saying how big it is — **12 files**, broken down by
+added/modified/deleted — and then **every changed file is stacked in one continuous scroll**, next
+file directly below the last, each under a sticky header naming it and its `+n −m`, so reviewing
+twelve files is one gesture, not twelve. The sidebar collapses the deep Kotlin package
 `src/main/kotlin/org/example/wide` into a **single row** instead of five nested ones, and unchanged
 regions fold away — so a 2-line edit inside a 120-line file is all that's on screen, under a
 `60 hidden lines` bar you can click to expand. The header is a breadcrumb of what you're reviewing:
@@ -103,14 +104,22 @@ you can review several commits as one diff.
 
 - **One continuous scroll** over every changed file, not one file at a time. The sidebar tree
   scrolls you to a file and highlights whichever one you've scrolled to; each file's header has a
-  chevron to fold that file away.
-- **Side-by-side or inline**, toggled live.
+  chevron to fold that file away, and shows how many lines that file adds and removes.
+- **A count before the code** — how many files the selection touches, and how many are added,
+  modified or deleted.
+- **Side-by-side or inline**, toggled live. An added or deleted file always renders as one pane,
+  because there is no "before" to compare it against.
+- **Long lines wrap** rather than running off the edge, with a toggle. Two panes inside a capped
+  column are narrower than real code, and a clipped line is worse than a wrapped one when the
+  scrollbar that would reveal it only appears on hover.
 - **Unchanged regions collapsed** by default (at `git diff -U3` context), with a toggle to show
   everything.
 - Word-level change highlighting and a GitHub Primer dark theme, with contrast checked to WCAG AA
   over the diff tints.
-- **Drag-resizable sidebar** — double-click the seam to reset. Sidebar width and both view toggles
-  persist across reloads.
+- **Keyboard-reachable** — every row of the changed-file tree is a real control, so the whole
+  review can be navigated with Tab and Enter.
+- **Drag-resizable sidebar** — double-click the seam to reset. Sidebar width and all three view
+  toggles persist across reloads.
 
 ### Live updates
 
