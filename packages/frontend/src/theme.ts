@@ -78,22 +78,50 @@ export function installTheme(): void {
       // hide underlying decorations." An opaque tint here would paint over the
       // selection and search highlights inside a changed line.
       //
-      // Lines are tinted more weakly (14 ~ 8%) than intra-line word diffs
-      // (1a ~ 10%), which is how GitHub reads: a whole-line wash, with the
-      // tokens that actually changed picked out on top of it.
+      // Lines are tinted more weakly (20 ~ 13%) than the two of them stacked on
+      // an intra-line word diff, which is how GitHub reads: a whole-line wash,
+      // with the tokens that actually changed picked out on top of it.
       //
-      // The word tint is 10% rather than the 15% that reads best in isolation,
-      // because it stacks on top of the line tint and the text has to stay
-      // legible through both. At 15% the darkest syntax colour falls to 4.3:1
-      // — under WCAG AA; at 10% the worst case is 4.7:1. The gutter keeps the
-      // stronger 15%, where nothing is drawn on top of it.
-      'diffEditor.insertedTextBackground': '#3fb9501a',
-      'diffEditor.removedTextBackground': '#f851491a',
-      'diffEditor.insertedLineBackground': '#3fb95014',
-      'diffEditor.removedLineBackground': '#f8514914',
+      // THESE NUMBERS ARE A CONSTRAINED OPTIMUM, NOT A PREFERENCE, and the
+      // constraint is far tighter than it looks. Three things bound them:
+      //
+      //  - The darkest token in `rules` above is `comment` #8b949e, and it has
+      //    to stay >= 4.5:1 (WCAG AA) read THROUGH the line tint and the word
+      //    tint stacked. That is the entire budget and there is almost none of
+      //    it: on bare canvas the comment is only 5.0:1, so about half a point
+      //    is available to spend. Swept in 1/255 steps, the frontier is line
+      //    0x2c / word 0x07 — past line 0x2f NO word tint keeps AA at all.
+      //  - Raising the line tint COSTS word-diff legibility, because the word
+      //    tint is read against the line tint under it, not against the canvas.
+      //    Measured: line 0x14/word 0x1a gives word-vs-line 1.17; line 0x26 /
+      //    word 0x0a buys a 1.25:1 line but collapses the word highlight to
+      //    1.07, which is not a highlight. 0x20/0x10 is the balance point —
+      //    line 1.11 -> 1.20, word 1.17 -> 1.10.
+      //  - The gutter carries no code, only the line number #6e7681 (already
+      //    just 4.13:1 on bare canvas). 0x32 (20%) is the most it takes before
+      //    that drops under 3:1, so the gutter is where the free contrast is
+      //    and it is now spent.
+      //
+      // Be blunt about the size of this: the added line goes from 1.11:1 to
+      // 1.20:1. That is small, and it is the ceiling — a diff tint simply IS a
+      // low-contrast signal, and GitHub dark's own added line is 1.20:1 too.
+      // What makes a change legible is redundancy: this wash, the stronger
+      // gutter, and the +/- glyph renderIndicators draws. Two dead ends worth
+      // not re-walking: more alpha here fails AA, and no alpha makes added and
+      // removed distinguishable in greyscale (green and red at equal alpha land
+      // at the same luminance — 1.03:1 apart at 8%, still only 1.13:1 at 28%),
+      // so the glyph is the non-colour carrier and has to stay.
+      //
+      // The one lever that would genuinely open headroom is lightening
+      // `comment`. That changes how the theme reads and belongs in its own
+      // commit with its own argument, not smuggled in under a diff-tint fix.
+      'diffEditor.insertedTextBackground': '#3fb95010',
+      'diffEditor.removedTextBackground': '#f8514910',
+      'diffEditor.insertedLineBackground': '#3fb95020',
+      'diffEditor.removedLineBackground': '#f8514920',
 
-      'diffEditorGutter.insertedLineBackground': '#3fb95026',
-      'diffEditorGutter.removedLineBackground': '#f8514926',
+      'diffEditorGutter.insertedLineBackground': '#3fb95032',
+      'diffEditorGutter.removedLineBackground': '#f8514932',
       'diffEditorOverview.insertedForeground': '#3fb950',
       'diffEditorOverview.removedForeground': '#f85149',
       'diffEditor.diagonalFill': '#30363d',
