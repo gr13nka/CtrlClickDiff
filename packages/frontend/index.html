@@ -796,6 +796,21 @@
         border-radius: 0 0 calc(var(--ccd-radius-lg) - 1px) calc(var(--ccd-radius-lg) - 1px);
       }
 
+      /* The peek's elevation, and the only thing here that knows the widget
+         exists. Everything else about how it looks is theme.ts's peekView* keys
+         — colour is a theme concern — but there is no theme key for a shadow,
+         and without one the peek had to be told apart from the code behind it
+         by a saturated blue frame (see theme.ts's peek block for the numbers).
+
+         On `.peekview-widget`, not `.zone-widget`: setCssClass puts that class
+         on the widget's *container* (zoneWidget.js:323), which is the element
+         carrying the frame borders, while `.zone-widget` is the positioned
+         outer node. Scoped through `.ccd-card` so this is the review's peek and
+         not a rule about every zone widget Monaco might ever open. */
+      .ccd-card .zone-widget .peekview-widget {
+        box-shadow: 0 8px 24px var(--ccd-shadow);
+      }
+
       /* Placeholder text for a card whose editor has not arrived yet. On the
          ::after rather than as a child node, so the loading state cannot collide
          with the element Monaco is about to mount into. */

@@ -68,9 +68,57 @@ export function installTheme(): void {
       'editor.lineHighlightBackground': '#161b22',
       'editorWidget.background': '#161b22',
       'editorWidget.border': '#30363d',
-      'peekViewEditor.background': '#0d1117',
-      'peekViewResult.background': '#161b22',
+      // --- The Ctrl+click peek ---------------------------------------------
+      //
+      // Three of these keys were set and the other ten were not, so the widget
+      // this tool is named after rendered half GitHub and half VS Code. Two of
+      // the fallbacks were not cosmetic:
+      //
+      //  1. `peekView.border` is registered as an ALIAS of
+      //     `editorInfo.foreground` (peekView.js:232), whose dark default is
+      //     #3794ff — so an unset border painted a saturated blue frame,
+      //     measured at 6.17:1 against the canvas while the added lines it
+      //     framed sit at 1.204:1. Five times the contrast of the content, on
+      //     the chrome. index.html's palette comment states the rule that
+      //     breaks: the chrome reads quieter than the diff it frames. Same
+      //     defect the sidebar's activePath fill already had, same fix.
+      //  2. `peekViewEditor.background` was #0d1117 — bit-identical to
+      //     `editor.background`, measured 1.000:1 against the editor behind it.
+      //     Nothing but that blue frame said "overlay", which is exactly WHY
+      //     the frame had to shout. Calming the frame without giving the peek a
+      //     surface of its own would have dissolved it into the diff, so these
+      //     two are one change and must stay that way.
+      //
+      // The layering now reads by elevation instead of by hue: title and
+      // preview raised to canvas-subtle, the candidate list recessed to canvas
+      // so the ANSWER is the brightest surface and the choice is subordinate,
+      // and index.html's one `.peekview-widget` rule carries the shadow.
+      //
+      // The contrast budget here is looser than the diff's — the peek preview
+      // is a plain editor with no diff tint under the tokens — but it is not
+      // free: raising the background to #161b22 costs every token some
+      // headroom, and `comment` #8b949e is the theme's darkest. Measured in the
+      // browser at 5.62:1, against the 4.5:1 floor. If that surface ever moves
+      // again, re-measure the comment rather than assuming.
+      'peekView.border': '#30363d',
       'peekViewTitle.background': '#161b22',
+      'peekViewTitleLabel.foreground': '#e6edf3',
+      'peekViewTitleDescription.foreground': '#8b949e',
+      'peekViewEditor.background': '#161b22',
+      'peekViewEditorGutter.background': '#161b22',
+      'peekViewEditorStickyScroll.background': '#161b22',
+      'peekViewResult.background': '#0d1117',
+      'peekViewResult.fileForeground': '#e6edf3',
+      'peekViewResult.lineForeground': '#8b949e',
+      // Two accents that were neither of ours: the selected row came up in VS
+      // Code's #3399ff33 and the match highlights in #ea5c004d / #ff8f0099, a
+      // saturated orange painted straight over the definition the reader came
+      // to read. The selection now uses the app's own accent, and the match
+      // highlight the attention amber at an alpha low enough to sit under text.
+      'peekViewResult.selectionBackground': '#1f6feb40',
+      'peekViewResult.selectionForeground': '#e6edf3',
+      'peekViewResult.matchHighlightBackground': '#1f6feb40',
+      'peekViewEditor.matchHighlightBackground': '#d2992240',
 
       // Bracket-pair colourisation is on by default and is NOT covered by the
       // `rules` above — it is painted from these workbench colours, whose
