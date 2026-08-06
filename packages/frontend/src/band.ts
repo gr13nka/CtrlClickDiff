@@ -127,6 +127,13 @@ export interface BandHooks {
   onActivePath(path: string): void;
   /** The ⚠ tooltip for a file with skipped commits. Owned by the shell: only it knows commit subjects. */
   describeSkipped(shas: string[]): string;
+  /**
+   * Opens the commit palette. The way out of an empty review, which is the one
+   * state where the column has nothing to show and so has to offer something
+   * instead. A hook rather than an import because the palette needs the commit
+   * list and the current selection, and both live in the shell.
+   */
+  onChooseCommits(): void;
   /** Surfaces a mount failure. The band has no status line of its own. */
   onError(path: string, err: unknown): void;
 }
@@ -529,6 +536,44 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
   }
 
   /**
+   * What a review with no reviewable files says.
+   *
+   * It goes in the band because that is where the reader is looking — the same
+   * sentence used to be a line of muted 12px text in the corner of the sidebar
+   * while the main column was 1290x850 of nothing, which reads as a tool that
+   * has broken rather than one with an answer.
+   *
+   * The languages are named as a category and not enumerated: 641f86e removed
+   * the extension list on the grounds that a sentence spelling out a dozen
+   * suffixes stops being a sentence, and that is still true here. What this
+   * adds over the old wording is the second half of an empty state — why it
+   * happened, and something to do about it.
+   */
+  function buildEmpty(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'ccd-band-empty';
+
+    const title = document.createElement('p');
+    title.className = 'ccd-empty-title';
+    title.textContent = 'Nothing to review here';
+
+    const body = document.createElement('p');
+    body.className = 'ccd-empty-body';
+    body.textContent =
+      'Nothing in this selection is in a language CtrlClickDiff can read — a commit ' +
+      'that only touches docs, configuration or shell scripts looks empty here.';
+
+    const action = document.createElement('button');
+    action.className = 'ccd-btn';
+    action.type = 'button';
+    action.textContent = 'Choose different commits';
+    action.addEventListener('click', () => hooks.onChooseCommits());
+
+    el.append(title, body, action);
+    return el;
+  }
+
+  /**
    * How big this review is, above the first card: a file count and a breakdown
    * by status.
    *
@@ -600,7 +645,10 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     // argument, making every card after the first a context card.
     cards = files.map((file) => buildCard(file));
     for (const card of cards) byPath.set(card.file.path, card);
-    host.append(buildSummary(files), ...cards.map((c) => c.el));
+    host.append(
+      files.length === 0 ? buildEmpty() : buildSummary(files),
+      ...cards.map((c) => c.el)
+    );
     host.scrollTop = 0;
 
     mountObserver = new IntersectionObserver(

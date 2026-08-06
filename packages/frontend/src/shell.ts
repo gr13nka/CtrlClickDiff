@@ -248,6 +248,15 @@ export function initShell(rootEl: HTMLElement): void {
       rowsByPath.get(path)?.scrollIntoView({ block: 'nearest' });
     },
     describeSkipped,
+    // The same palette the selection crumb opens, reached from the empty
+    // state's own button so a reader who has landed on nothing does not have to
+    // find their way back up to the breadcrumb to get out of it.
+    onChooseCommits: () =>
+      openCommitPalette({
+        commits,
+        selected: selection,
+        onApply: (next) => void selectCommits(next)
+      }),
     onError: (path, err) => setStatus(`Error loading ${path}: ${errorMessage(err)}`)
   });
 
@@ -870,16 +879,14 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
   // deleted file would be hiding a change.
   band?.render(requireRepoId(), files);
 
-  // Fixed wording rather than the registry's extension list: with a dozen-plus
-  // languages, spelling out ".kt/.ts/.tsx/.js/..." in a sentence stops reading
-  // as a sentence.
-  setStatus(
-    files.length > 0
-      ? ''
-      : selection.length > 1
-        ? 'No reviewable source files changed in these commits.'
-        : 'No reviewable source files changed in this commit.',
-  );
+  // Nothing, either way. "No reviewable source files changed" used to be
+  // written here, into a muted line in the corner of the sidebar, while the
+  // column the reader was actually looking at stayed empty — so the message was
+  // both easy to miss and unable to offer a way out. band.ts renders that state
+  // now, with the same reasoning about not enumerating extensions and a button
+  // back to the commit palette. Saying it in two places would only be two
+  // places to keep in step.
+  setStatus('');
 }
 
 // ---------------------------------------------------------------------------

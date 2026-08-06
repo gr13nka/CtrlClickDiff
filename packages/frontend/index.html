@@ -548,6 +548,32 @@
         padding: var(--ccd-band-pad);
       }
 
+      /* A review with nothing in it. Sits where the cards would be, because the
+         column is where the reader is looking — this used to be one muted line
+         in the corner of the sidebar beside 1290x850 of empty canvas.
+         Left-aligned and narrow rather than centred in the void: the eye
+         already starts at the left edge of this column, and a centred block
+         would sit somewhere no other content ever does. */
+      .ccd-band-empty {
+        flex: 0 0 auto;
+        max-width: 52ch;
+        padding: 24px 4px;
+      }
+
+      .ccd-empty-title {
+        margin: 0 0 8px;
+        color: var(--ccd-fg-emphasis);
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .ccd-empty-body {
+        margin: 0 0 16px;
+        color: var(--ccd-fg-muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
       /* How big this review is, read once before the first card. Deliberately
          quiet — it is orientation, not content, so it sits at the muted colour
          and lets the diff below it be the loud thing. NOT sticky: the card
