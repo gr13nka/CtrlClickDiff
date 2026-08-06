@@ -385,6 +385,15 @@
         background: var(--ccd-canvas-subtle);
       }
 
+      /* Both kinds of row are role=button + tabindex=0, so both need a ring.
+         Inset, because a row is full-bleed against the sidebar edge and an
+         outset outline would be clipped on the left by the overflow above. */
+      .ccd-file-row:focus-visible,
+      .ccd-dir-row:focus-visible {
+        outline: 2px solid var(--ccd-accent-bg);
+        outline-offset: -2px;
+      }
+
       /* The file the band reports is at the top of the scroller.
          `active` is REPORTED, not chosen — shell.ts sets it from the band's
          IntersectionObserver, so it follows the reader's scroll rather than
@@ -401,11 +410,6 @@
         background: var(--ccd-canvas-subtle);
         box-shadow: inset 2px 0 0 var(--ccd-accent-bg);
         color: var(--ccd-fg-emphasis);
-      }
-
-      .ccd-dir-row:focus-visible {
-        outline: 1px solid var(--ccd-fg-muted);
-        outline-offset: -1px;
       }
 
       /* One glyph that rotates, rather than two glyphs swapped by JS: the only

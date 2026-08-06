@@ -16,6 +16,7 @@ import type * as monaco from 'monaco-editor';
 import {
   type BranchInfo,
   type CommitInfo,
+  type FileStatus,
   type Preview,
   type PreviewFile,
   type RepoEntry,
@@ -996,6 +997,17 @@ function dirItem(node: DirNode, depth: number): HTMLLIElement {
 }
 
 /**
+ * What A/M/D are called out loud. Only the accessible name uses these — the
+ * badge stays a single letter, because the whole reason it is a letter is that
+ * a tree of two hundred rows cannot spend a word each on saying so.
+ */
+const STATUS_WORDS: Record<FileStatus, string> = {
+  A: 'added',
+  M: 'modified',
+  D: 'deleted',
+};
+
+/**
  * One file: the same row the flat list rendered, with two differences — the
  * label is the basename and the indent comes from `depth`.
  *
@@ -1010,10 +1022,21 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
   // Still the full path, not the shortened label: the tooltip is where the
   // path the row no longer spells out comes back.
   row.title = node.path;
+  // Same reasoning dirItem already states — the sidebar is the primary way
+  // around a review, so its rows have to be reachable without a mouse. Only the
+  // directory rows ever got it, which left the tab order able to open a folder
+  // and unable to reach a single thing inside it. These rows are the
+  // destinations; they are the half that had to be keyboard-reachable.
+  row.role = 'button';
+  row.tabIndex = 0;
 
   const badge = document.createElement('span');
   badge.className = `ccd-badge ccd-badge-${node.status}`;
   badge.textContent = node.status;
+  // A one-letter badge is a fine glyph and a terrible thing to hear: read out,
+  // the row was "A deeplink.ts". Hidden here and spelled into the row's own
+  // label below, so the status is announced as a word exactly once.
+  badge.ariaHidden = 'true';
 
   const pathEl = document.createElement('span');
   pathEl.className = 'ccd-file-path';
@@ -1037,10 +1060,21 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
     row.title = `${node.path}\n\n${warn.title}`;
   }
 
-  row.addEventListener('click', () => {
+  row.ariaLabel = `${node.path}, ${STATUS_WORDS[node.status]}`;
+
+  const open = (): void => {
     revealPath(node.path).catch((err: unknown) => {
       setStatus(`Error loading diff: ${errorMessage(err)}`);
     });
+  };
+
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    // Space scrolls the file list, which would move the row out from under the
+    // reader the moment they act on it — the same reason dirItem preventDefaults.
+    e.preventDefault();
+    open();
   });
 
   rowsByPath.set(node.path, row);
