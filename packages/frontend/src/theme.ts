@@ -8,6 +8,20 @@ import * as monaco from 'monaco-editor';
 const THEME_ID = 'ccd-github-dark';
 
 /**
+ * The whole-line diff washes, named because CSS needs them too.
+ *
+ * index.html has one rule that must paint with exactly the inserted-line
+ * colour — Monaco's alignment spacer beside an added block, which Monaco itself
+ * paints with the *removed* colour (see that rule). Restating `#3fb95020` there
+ * would be a second copy of a value whose whole job is to match, i.e. the drift
+ * hazard `modelUri`/`parseModelUri` are kept together to avoid. So the constant
+ * lives here, next to the theme it belongs to, and is published to CSS at the
+ * foot of installTheme.
+ */
+const DIFF_INSERTED_LINE = '#3fb95020';
+const DIFF_REMOVED_LINE = '#f8514920';
+
+/**
  * Defines and activates the app's Monaco theme. Call once, before any editor
  * is constructed.
  *
@@ -123,8 +137,8 @@ export function installTheme(): void {
       // commit with its own argument, not smuggled in under a diff-tint fix.
       'diffEditor.insertedTextBackground': '#3fb95010',
       'diffEditor.removedTextBackground': '#f8514910',
-      'diffEditor.insertedLineBackground': '#3fb95020',
-      'diffEditor.removedLineBackground': '#f8514920',
+      'diffEditor.insertedLineBackground': DIFF_INSERTED_LINE,
+      'diffEditor.removedLineBackground': DIFF_REMOVED_LINE,
 
       'diffEditorGutter.insertedLineBackground': '#3fb95026',
       'diffEditorGutter.removedLineBackground': '#f8514926',
@@ -145,4 +159,13 @@ export function installTheme(): void {
   });
 
   monaco.editor.setTheme(THEME_ID);
+
+  // Published so index.html can paint Monaco's alignment spacer with the same
+  // wash as the lines it sits beside. Written from here rather than declared in
+  // the stylesheet so the value exists once: a spacer tinted a shade off the
+  // block it belongs to is worse than one left alone, and nothing would catch
+  // the two drifting apart.
+  const root = document.documentElement.style;
+  root.setProperty('--ccd-diff-inserted-line', DIFF_INSERTED_LINE);
+  root.setProperty('--ccd-diff-removed-line', DIFF_REMOVED_LINE);
 }

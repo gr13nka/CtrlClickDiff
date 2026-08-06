@@ -296,16 +296,27 @@ dark's own added line is also 1.20:1 — a diff tint simply *is* a low-contrast 
 "raise it to 3:1" instinct is wrong.
 
 **Monaco paints its alignment spacers with the *removed*-line gutter colour, so a block of purely
-added lines wears a red bar down its left edge.** Both claims about the same rows at once, and it is
-loudest in inline mode where the bar sits directly against the green. The spacers are the margin
-view zones Monaco inserts where one side has no line opposite the other — beside an addition that is
-every row of it (measured on `band.ts`: ten of them). A real deletion is a *different* element
-(`cmdr gutter-delete`, and in inline mode `inline-deleted-margin-view-zone`), which is what makes
-the fix possible: `.ccd-card .margin-view-zones > .gutter-delete { background: transparent }` takes
-the red off the spacers and leaves it everywhere something really was removed. There is no theme key
-that separates them — the spacer and the real deletion share
-`diffEditorGutter.removedLineBackground` — so targeting Monaco's internals is the only option here,
-the same call `peekscope.ts` makes for the peek list.
+added lines wore a red bar down its left edge** — both claims about the same rows at once, loudest
+in inline mode where the bar sits directly against the green. A spacer is the margin view zone
+Monaco inserts where one side has no line opposite the other; in the **original** editor that always
+means the modified side gained lines, i.e. an addition (measured on `band.ts`: ten of them). A real
+deletion is a *different* element (`cmdr gutter-delete`, and in inline mode
+`inline-deleted-margin-view-zone`), which is what makes the fix targetable at all — there is no
+theme key that separates them, since the spacer and the real deletion share
+`diffEditorGutter.removedLineBackground`.
+
+**The fix is to paint the spacer with the *inserted* wash, not to clear it, and clearing it was
+tried first and was half a fix.** Transparent removes the false red and leaves the added rows
+visibly *shorter* than the removed ones, because a removed row's own `cmdr gutter-delete` does cover
+that column. Measured on `diff.ts` at 1253px wide: removed spanned x=1..1252, added only
+x=43..1252, and that 42px step is the original editor's line-number column. So the rule is
+`.ccd-card .editor.original .margin-view-zones > .gutter-delete` with
+`var(--ccd-diff-inserted-line)`, and **`theme.ts` publishes that custom property** at the foot of
+`installTheme` rather than the stylesheet restating `#3fb95020` — the value's whole job is to equal
+`diffEditor.insertedLineBackground`, and a spacer a shade off the block it belongs to is worse than
+one left alone. Same reasoning that keeps `modelUri`/`parseModelUri` together. Check both edges when
+touching this: added and removed must start at the same x, and in inline mode their right edges
+still differ legitimately, because the word-diff spans end where the changed text does.
 
 **`diffEditorGutter.*` stays at 15%.** Nothing but the line number `#6e7681` sits on it and it takes
 20% before that drops under 3:1, so it looks like free contrast to spend. It was raised to 20% once
