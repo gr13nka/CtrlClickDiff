@@ -548,6 +548,51 @@
         padding: var(--ccd-band-pad);
       }
 
+      /* How big this review is, read once before the first card. Deliberately
+         quiet — it is orientation, not content, so it sits at the muted colour
+         and lets the diff below it be the loud thing. NOT sticky: the card
+         headers own that edge, and two sticky layers would fight for it. */
+      .ccd-band-summary {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 2px 4px 6px;
+        color: var(--ccd-fg-muted);
+        font-size: 12px;
+      }
+
+      .ccd-summary-count {
+        color: var(--ccd-fg-emphasis);
+        font-weight: 600;
+      }
+
+      .ccd-summary-group {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .ccd-summary-warn {
+        color: var(--ccd-attention);
+      }
+
+      /* `+n −m` at the right end of a card header. Tabular figures so the two
+         numbers do not jitter between cards as the reader scrolls past them. */
+      .ccd-card-churn {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 6px;
+        font: 11px ui-monospace, monospace;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* The same green and red as the lines they count. The sign is written out
+         rather than left to the colour, so the pair still reads when the colour
+         does not — printed, dimmed, or by a reader who cannot separate the two. */
+      .ccd-churn-add { color: var(--ccd-success); }
+      .ccd-churn-del { color: var(--ccd-danger); }
+
       /* NO `overflow` here, and that absence is load-bearing. Any overflow other
          than `visible` gives an element a scrolling box, and a sticky descendant
          sticks within its NEAREST such box — so `overflow: hidden` on the card
