@@ -70,6 +70,14 @@
            fixed height: a long path wraps to a second line rather than being
            truncated past its filename. */
         --ccd-card-header-h: 32px;
+        /* The band's own inset. A token rather than a literal because
+           .ccd-card-header's sticky offset has to be its exact negative: a
+           scroll container paints scrolled content over its padding, so a header
+           pinned at the *content* edge leaves a strip of the previous lines
+           showing above it. Same reasoning as initResizer reading its clamp
+           bounds back from CSS instead of retyping them — two values that must
+           agree should not be two literals. */
+        --ccd-band-pad: 12px;
       }
 
       html, body {
@@ -513,19 +521,22 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        padding: 12px;
+        padding: var(--ccd-band-pad);
       }
 
+      /* NO `overflow` here, and that absence is load-bearing. Any overflow other
+         than `visible` gives an element a scrolling box, and a sticky descendant
+         sticks within its NEAREST such box — so `overflow: hidden` on the card
+         made the card its own header's scrollport, and since a card never
+         scrolls, `top: 0` resolved to the card's own top and the header rode
+         away with it. Measured before the fix: header top at scrollTop
+         400/1400/2400 was -343/-1343/-2343, i.e. never pinned once. The clip
+         that rounds the editor's square corners lives on .ccd-card-body instead,
+         which is not an ancestor of the header. */
       .ccd-card {
         border: 1px solid var(--ccd-border);
         border-radius: var(--ccd-radius-lg);
         background: var(--ccd-canvas);
-        /* Rounds the editor's square corners off. Safe because the only widgets
-           that would overflow a card are hovers and suggests, and createFileDiff
-           sets fixedOverflowWidgets so those render against <body>; peek is a
-           zone widget living inline in the content, so the card grows for it
-           rather than clipping it. */
-        overflow: hidden;
         /* Stops a flex item from being squeezed below its content height — the
            heights here are computed, and flex must not renegotiate them. */
         flex: 0 0 auto;
@@ -542,10 +553,18 @@
 
       /* Sticky, so the path stays readable while its own diff scrolls past. The
          z-index keeps it over Monaco's line content; the opaque background is
-         what makes the code slide under it rather than through it. */
+         what makes the code slide under it rather than through it.
+
+         The radius is written here rather than inherited through a clip on the
+         card, because that clip is what stopped this from sticking at all — see
+         .ccd-card. Inset by the card's 1px border so the two curves are
+         concentric instead of the header's corner cutting the border's. */
       .ccd-card-header {
         position: sticky;
-        top: 0;
+        /* The band's padding, negated — see --ccd-band-pad. Pins the header to
+           the scrollport's edge instead of its content edge, so no strip of the
+           lines above it shows through while it is stuck. */
+        top: calc(-1 * var(--ccd-band-pad));
         z-index: 2;
         display: flex;
         align-items: center;
@@ -554,10 +573,13 @@
         padding: 5px 10px;
         background: var(--ccd-canvas-subtle);
         border-bottom: 1px solid var(--ccd-border);
+        border-radius: calc(var(--ccd-radius-lg) - 1px) calc(var(--ccd-radius-lg) - 1px) 0 0;
       }
 
+      /* Collapsed, the header IS the card, so it carries all four corners. */
       .ccd-card.collapsed .ccd-card-header {
         border-bottom: none;
+        border-radius: calc(var(--ccd-radius-lg) - 1px);
       }
 
       .ccd-card-twisty {
@@ -614,6 +636,15 @@
       .ccd-card-body {
         /* Height is written in px by diff.ts. Nothing here may fight it. */
         min-width: 0;
+        /* Rounds the editor's square bottom corners off. This is the clip that
+           used to sit on .ccd-card; it works the same from here and, unlike
+           there, it is not an ancestor of the sticky header. Safe for the same
+           reason it was safe before: the only widgets that would overflow are
+           hovers and suggests, and createFileDiff sets fixedOverflowWidgets so
+           those render against <body>; peek is a zone widget living inline in
+           the content, so the card grows for it rather than clipping it. */
+        overflow: hidden;
+        border-radius: 0 0 calc(var(--ccd-radius-lg) - 1px) calc(var(--ccd-radius-lg) - 1px);
       }
 
       /* Placeholder text for a card whose editor has not arrived yet. On the
