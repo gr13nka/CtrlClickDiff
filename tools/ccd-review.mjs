@@ -129,9 +129,16 @@ async function iterationCommits(repo) {
   return { shas: all.slice(0, MAX_COMMITS), since };
 }
 
-/** HEAD as it was when this agent session started, if the hook recorded it. */
+/**
+ * HEAD as it was when this agent session started, if the hook recorded it.
+ *
+ * Location and key must match tools/ccd-session-start.sh exactly — including
+ * XDG_CACHE_HOME and the 16-hex-digit path digest — or the writer files it where
+ * the reader never looks, and the base silently degrades to merge-base.
+ */
 async function sessionBase(repoPath) {
-  const file = join(homedir(), '.cache', 'ccd', 'session-base', digest(repoPath));
+  const cache = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+  const file = join(cache, 'ccd', 'session-base', digest(repoPath));
   const sha = await readFile(file, 'utf8').catch(() => '');
   return sha.trim() || null;
 }
