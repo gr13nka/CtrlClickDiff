@@ -25,7 +25,7 @@ import { api } from './api';
 import { initBand, type Band } from './band';
 import { openBranchPalette } from './branchpalette';
 import { openCommitPalette } from './commitpalette';
-import { parseDeepLink, type DeepLinkRequest } from './deeplink';
+import { parseDeepLink, updateAddressBar, type DeepLinkRequest } from './deeplink';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
@@ -477,6 +477,13 @@ function renderTrail(): void {
   }
 
   topBar?.setCrumbs(crumbs);
+
+  // The same funnel, for the same reason: every entry point that can change what
+  // is under review already ends here, so this is where the URL naming it stays
+  // true without a second set of hooks to keep in sync. It writes nothing until
+  // a repository is adopted — see updateAddressBar, where that guard is what
+  // stops initShell's first paint from erasing an incoming link.
+  updateAddressBar({ repoPath: repo?.path ?? '', ref: selectedRef, shas: selection.map((c) => c.sha) });
 }
 
 /** `4221baf · Add User.email…`, or how many commits when it is more than one. */
