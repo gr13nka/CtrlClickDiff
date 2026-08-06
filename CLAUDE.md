@@ -94,6 +94,11 @@ few of its own commits) and read the numbers rather than the impression:
   while auditing, on top of the three traps already listed below.
 - `getComputedStyle` rounds alpha to 2dp (`0.1255` → `"0.13"`), so a contrast check reading colours
   back from the DOM is slightly pessimistic against the 8-digit hex the theme declares.
+- **Do not pass `--hide-scrollbars` to a Chromium you are auditing with.**
+  `docs/capture-screenshots.mjs` passes it so the committed images stay stable, which is right for
+  that job and wrong for every other one: it meant nothing that ever looked at this app rendered a
+  scrollbar, and an unstyled 15px native bar sat down the edge of the band unnoticed. It also makes
+  the review column 15px wider than it really is, so pane widths measured under it are optimistic.
 
 The blur and greyscale passes are the ones that catch misallocated weight, and they are worth more
 here than any single ratio: blur the screenshot and the dominant shape must be the changed lines.

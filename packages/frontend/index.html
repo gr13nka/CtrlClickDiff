@@ -117,6 +117,17 @@
            below. Inset rather than canvas, on the same rule as the sidebar and
            header: chrome recedes, code does not. */
         background: var(--ccd-canvas-inset);
+        /* Both of these INHERIT, which is why they are set once here instead of
+           on each scroll container: the band, the file tree and the palettes all
+           get the same bar. Left at the platform default, a full-width native
+           scrollbar sat down the right-hand edge of a dark UI, 15px wide and
+           unstyled — and nothing in this repo ever showed it, because every
+           screenshot is taken with Chromium's --hide-scrollbars.
+           Styled rather than hidden: the band is the app's only scroll region,
+           so this bar is the only thing on screen saying how far through a
+           review the reader is. */
+        scrollbar-width: thin;
+        scrollbar-color: var(--ccd-border) transparent;
       }
 
       /* The three-column row. --ccd-sidebar-w is written here by initResizer
@@ -556,6 +567,12 @@
         flex-direction: column;
         gap: 12px;
         padding: var(--ccd-band-pad);
+        /* Reserve the bar's width whether or not it is needed. Not inherited
+           like the two properties on #app, so it is set where it matters: a
+           short review that does not scroll would otherwise lay its cards out
+           ~11px wider than a long one, and switching between two selections
+           would reflow every wrapped line in the column. */
+        scrollbar-gutter: stable;
       }
 
       /* A review with nothing in it. Sits where the cards would be, because the
