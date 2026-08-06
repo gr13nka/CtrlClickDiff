@@ -97,10 +97,16 @@ export function installTheme(): void {
       //    word 0x0a buys a 1.25:1 line but collapses the word highlight to
       //    1.07, which is not a highlight. 0x20/0x10 is the balance point —
       //    line 1.11 -> 1.20, word 1.17 -> 1.10.
-      //  - The gutter carries no code, only the line number #6e7681 (already
-      //    just 4.13:1 on bare canvas). 0x32 (20%) is the most it takes before
-      //    that drops under 3:1, so the gutter is where the free contrast is
-      //    and it is now spent.
+      //  - The gutter LOOKS like free contrast — nothing but the line number
+      //    #6e7681 sits on it, and it takes 0x32 (20%) before that drops under
+      //    3:1. It is not free, and the reason is only visible on an added or
+      //    deleted file: Monaco renders the empty side as a single degenerate
+      //    line, and paints its status down the full height of the 42px
+      //    original column. On a deleted file that column is red and correct;
+      //    on an ADDED one it is also red, running the whole height of a file
+      //    that deletes nothing. Raising the gutter amplifies that false signal
+      //    faster than it helps the modified files it was meant for, which are
+      //    already carried by the line wash. So it stays at 0x26.
       //
       // Be blunt about the size of this: the added line goes from 1.11:1 to
       // 1.20:1. That is small, and it is the ceiling — a diff tint simply IS a
@@ -120,8 +126,8 @@ export function installTheme(): void {
       'diffEditor.insertedLineBackground': '#3fb95020',
       'diffEditor.removedLineBackground': '#f8514920',
 
-      'diffEditorGutter.insertedLineBackground': '#3fb95032',
-      'diffEditorGutter.removedLineBackground': '#f8514932',
+      'diffEditorGutter.insertedLineBackground': '#3fb95026',
+      'diffEditorGutter.removedLineBackground': '#f8514926',
       'diffEditorOverview.insertedForeground': '#3fb950',
       'diffEditorOverview.removedForeground': '#f85149',
       'diffEditor.diagonalFill': '#30363d',

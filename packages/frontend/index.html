@@ -385,9 +385,22 @@
         background: var(--ccd-canvas-subtle);
       }
 
+      /* The file the band reports is at the top of the scroller.
+         `active` is REPORTED, not chosen — shell.ts sets it from the band's
+         IntersectionObserver, so it follows the reader's scroll rather than
+         recording a click. It was a full-bleed accent fill with white text,
+         which measured 4.08:1 against the canvas and made a passive position
+         marker the single loudest element on a screen whose entire job is
+         reading code: the diff it was pointing at is 1.20:1, so the pointer had
+         over three times the contrast of the thing pointed to.
+         Now a surface plus a 2px accent rule — 1.19:1 for the fill, with the
+         rule itself at 3.7:1 doing the work in a few pixels. Same information,
+         a twentieth of the ink, and it leaves the accent free to mean
+         "something changed here" everywhere else. */
       .ccd-file-row.active {
-        background: var(--ccd-accent-bg);
-        color: var(--ccd-accent-fg);
+        background: var(--ccd-canvas-subtle);
+        box-shadow: inset 2px 0 0 var(--ccd-accent-bg);
+        color: var(--ccd-fg-emphasis);
       }
 
       .ccd-dir-row:focus-visible {
