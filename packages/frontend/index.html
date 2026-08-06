@@ -59,8 +59,15 @@
            canvas either side. Not a stylistic flourish: a diff read side by side
            is two columns of code, and past about this width a line of Kotlin has
            more empty space after it than text in it, while the eye has to travel
-           the whole monitor to get from the left pane to the right one. Wide
-           enough that neither pane wraps at a normal font size, and no wider. */
+           the whole monitor to get from the left pane to the right one.
+
+           This used to claim it was "wide enough that neither pane wraps at a
+           normal font size". That was true of the fixture repos and false of
+           real code: 1600px minus a 300px sidebar leaves 633px a pane, and this
+           project's own shell.ts has lines of 899px, so every one of them was
+           clipped. Wrapping is now on by default (diff.ts's viewOptions) and is
+           what makes the cap safe — the cap decides how far the eye travels, and
+           wrapping decides that nothing is lost when it stops. */
         --ccd-content-w-max: 1600px;
         /* Horizontal step per level of file-tree nesting. Deliberately smaller
            than the 12px gutter: at the 220px minimum sidebar width a depth-4

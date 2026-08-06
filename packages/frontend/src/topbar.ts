@@ -22,8 +22,10 @@
 import {
   isCollapseUnchanged,
   isSideBySide,
+  isWordWrap,
   setCollapseUnchanged,
-  setRenderSideBySide
+  setRenderSideBySide,
+  setWordWrap
 } from './diff';
 
 /** One step of the breadcrumb: what it says, and what clicking it opens. */
@@ -61,7 +63,7 @@ export function createTopBar(): TopBar {
 
   const actions = document.createElement('div');
   actions.className = 'ccd-topbar-actions';
-  actions.append(layoutToggle(), collapseToggle());
+  actions.append(layoutToggle(), wrapToggle(), collapseToggle());
 
   el.append(trail, actions);
 
@@ -173,6 +175,35 @@ function layoutToggle(): HTMLElement {
 
   sync();
   return group;
+}
+
+/**
+ * "Wrap lines" as a checkbox, for the same reason "Collapse unchanged" is one:
+ * off means something obvious (let long lines run off the edge).
+ *
+ * Written out rather than shared with collapseToggle below, even though the two
+ * are nearly the same fifteen lines. Same call as the one branchpalette.ts
+ * records for the two palettes: what differs between them is not a parameter but
+ * a *reason*, and each function's comment is that reason. A `checkToggle(label,
+ * get, set)` would have to leave both comments somewhere generic, where neither
+ * is about the control the reader is looking at. The trigger to revisit is a
+ * third checkbox, not this one.
+ */
+function wrapToggle(): HTMLElement {
+  const wrapper = document.createElement('label');
+  wrapper.className = 'ccd-check';
+
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.className = 'ccd-checkbox';
+  box.checked = isWordWrap();
+  box.addEventListener('change', () => setWordWrap(box.checked));
+
+  const text = document.createElement('span');
+  text.textContent = 'Wrap lines';
+
+  wrapper.append(box, text);
+  return wrapper;
 }
 
 /**

@@ -59,6 +59,17 @@ const DIFF_MODE_KEY = 'ccd.diffMode';
 // reads as side-by-side, which is the default.
 let sideBySide = readStored(DIFF_MODE_KEY) !== 'inline';
 
+const WRAP_KEY = 'ccd.wordWrap';
+
+// Whether a line too long for its pane wraps instead of running off the edge.
+// On unless explicitly turned off, and that default is the fix for a measured
+// failure rather than a taste: side-by-side halves an already-capped column, so
+// on this repo's own shell.ts at 1900px each pane is 633px against a widest line
+// of 899px — 113 of 113 rendered lines clipped. Monaco's horizontal scrollbar is
+// opacity 0 until hovered, so nothing on screen even said text was missing; the
+// reader silently lost the end of every comment.
+let wordWrap = readStored(WRAP_KEY) !== 'off';
+
 const COLLAPSE_KEY = 'ccd.collapseUnchanged';
 
 // Whether long unchanged stretches are folded away behind a clickable bar.
@@ -81,6 +92,12 @@ let collapseUnchanged = readStored(COLLAPSE_KEY) !== 'off';
 function viewOptions(status: FileStatus): monaco.editor.IDiffEditorOptions {
   return {
     renderSideBySide: sideBySide && status === 'M',
+    wordWrap: wordWrap ? 'on' : 'off',
+    // 'indent' rather than Monaco's default 'same': a continuation that starts
+    // further in than the line it continues cannot be mistaken for a statement
+    // of its own, which matters more here than anywhere, because the reader is
+    // scanning for what changed rather than following control flow.
+    wrappingIndent: 'indent',
     hideUnchangedRegions: {
       enabled: collapseUnchanged,
       // Three lines each side of a change, which is `git diff -U3` and what
@@ -120,6 +137,26 @@ export function isSideBySide(): boolean {
 export function setRenderSideBySide(next: boolean): void {
   sideBySide = next;
   writeStored(DIFF_MODE_KEY, next ? 'side-by-side' : 'inline');
+  applyViewOptions();
+}
+
+/** Whether long lines wrap. For the topbar's toggle. */
+export function isWordWrap(): boolean {
+  return wordWrap;
+}
+
+/**
+ * Wraps long lines, or lets them run off the edge again, and remembers which.
+ *
+ * The escape hatch exists because wrapping is not free everywhere: a wide table,
+ * generated code or ASCII art is held together by its columns, and reflowing it
+ * destroys the structure the reader was using. Off, the horizontal scrollbar is
+ * the only way to see the rest of a line — which is the state this app shipped
+ * in, so nothing is lost by making it reachable.
+ */
+export function setWordWrap(next: boolean): void {
+  wordWrap = next;
+  writeStored(WRAP_KEY, next ? 'on' : 'off');
   applyViewOptions();
 }
 
