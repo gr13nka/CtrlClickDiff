@@ -109,13 +109,34 @@ export async function listCommits(repoRoot: string, ref = 'HEAD'): Promise<Commi
   }
   const stdout = await run(repoRoot, [
     'log',
-    '--format=%H%x00%s%x00%an%x00%aI',
+    COMMIT_RECORD_FORMAT,
     '-n',
     String(COMMIT_LOG_LIMIT),
     '--end-of-options',
     ref,
     '--',
   ]);
+  return parseCommitRecords(stdout);
+}
+
+/**
+ * The one `git log --format` that yields a `CommitInfo`, and its parser.
+ *
+ * NUL-separated rather than any printable delimiter because a subject may
+ * contain anything a byte can be except NUL — a `|` or a tab in a commit message
+ * would otherwise split one record into two fields. The author *date* (`%aI`),
+ * not the committer date, for the reason recorded on `CommitInfo.date`.
+ *
+ * Format and parser are a pair and must move together: a caller that asks for
+ * one more field and forgets the split reads the wrong value out of every
+ * record, silently and at no point on a type error. Keeping them adjacent — and
+ * keeping the format a constant rather than a literal each caller retypes — is
+ * the same rule that keeps `modelUri`/`parseModelUri` in one file on the
+ * frontend.
+ */
+const COMMIT_RECORD_FORMAT = '--format=%H%x00%s%x00%an%x00%aI';
+
+function parseCommitRecords(stdout: string): CommitInfo[] {
   const commits: CommitInfo[] = [];
   for (const line of stdout.split('\n')) {
     if (!line) continue; // trailing newline from git log
