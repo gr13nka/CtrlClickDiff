@@ -165,7 +165,16 @@ check('replaceState, not pushState', historyAfter === historyBefore, `history.le
 // --- 3. a repository the backend refuses is reported, not swapped ----------
 console.log('3. an unopenable link says so instead of opening something else');
 await send('Page.navigate', { url: linkTo({ path: '/definitely/not/a/repo' }) });
-await waitFor(`(document.querySelector('.ccd-status')?.textContent ?? '').length > 0`, 'a status message');
+// Waiting for "a status message" is not waiting for the ANSWER: boot() writes
+// "Loading repository…" before its first fetch, so that poll is satisfied by the
+// question. It passed twice by timing luck before it was caught reading the
+// transient. Wait for the line to stop being a progress message instead, then
+// assert on whatever it settled to.
+await waitFor(
+  `(() => { const s = document.querySelector('.ccd-status')?.textContent ?? '';
+            return s.length > 0 && !s.startsWith('Loading'); })()`,
+  'the boot to settle on an answer',
+);
 
 const refusal = await status();
 check('names the failed path', refusal.includes('/definitely/not/a/repo'), refusal);
