@@ -738,6 +738,26 @@
         font-weight: 600;
       }
 
+      /* Monaco paints its ALIGNMENT SPACERS with the removed-line gutter colour,
+         so a block of purely added lines gets a red bar down its left edge —
+         "added" and "deleted" claimed about the same rows at once.
+
+         These spacers are the margin view zones Monaco inserts where one side
+         has no line to put opposite the other, which beside an addition is
+         every row of it: measured on band.ts, ten of them. A real deletion is a
+         different element (`cmdr gutter-delete`, and in inline mode
+         `inline-deleted-margin-view-zone`), so scoping to the view-zone
+         container keeps the red where something really was removed and takes it
+         off the rows where nothing was.
+
+         Targeting Monaco's internals is a last resort and this is one: the
+         colour comes from `diffEditorGutter.removedLineBackground`, which the
+         spacer and the real deletion share, so there is no theme key that
+         separates them. Same call peekscope.ts makes for the peek list. */
+      .ccd-card .margin-view-zones > .gutter-delete {
+        background: transparent;
+      }
+
       .ccd-card-body {
         /* Height is written in px by diff.ts. Nothing here may fight it. */
         min-width: 0;

@@ -290,13 +290,23 @@ non-colour carrier and has to stay. The one lever that would open real headroom 
 dark's own added line is also 1.20:1 — a diff tint simply *is* a low-contrast signal, so a
 "raise it to 3:1" instinct is wrong.
 
-**`diffEditorGutter.*` stays at 15%, and the reason is only visible on an added file.** Nothing but
-the line number `#6e7681` sits on it, and it takes 20% before that drops under 3:1 — so it reads as
-free contrast. It is not: in single-pane mode Monaco renders the empty side as one degenerate line
-and paints its status down the full height of the 42px original column, so an all-**added** file
-carries a red stripe its whole length (correct on a deleted file, false on an added one). Raising
-the gutter amplifies that false signal faster than it helps the modified files it was meant for,
-which the line wash already carries. Found by the blur test, not by reading the code.
+**Monaco paints its alignment spacers with the *removed*-line gutter colour, so a block of purely
+added lines wears a red bar down its left edge.** Both claims about the same rows at once, and it is
+loudest in inline mode where the bar sits directly against the green. The spacers are the margin
+view zones Monaco inserts where one side has no line opposite the other — beside an addition that is
+every row of it (measured on `band.ts`: ten of them). A real deletion is a *different* element
+(`cmdr gutter-delete`, and in inline mode `inline-deleted-margin-view-zone`), which is what makes
+the fix possible: `.ccd-card .margin-view-zones > .gutter-delete { background: transparent }` takes
+the red off the spacers and leaves it everywhere something really was removed. There is no theme key
+that separates them — the spacer and the real deletion share
+`diffEditorGutter.removedLineBackground` — so targeting Monaco's internals is the only option here,
+the same call `peekscope.ts` makes for the peek list.
+
+**`diffEditorGutter.*` stays at 15%.** Nothing but the line number `#6e7681` sits on it and it takes
+20% before that drops under 3:1, so it looks like free contrast to spend. It was raised to 20% once
+and put straight back: the gain on a modified file is marginal next to the line wash, and every
+point of it also amplified the spacer bar above. Now that the spacers are transparent the argument
+is only the first half — still not worth it, but re-measure rather than assume if you try.
 
 **`diffEditor.unchangedRegionBackground` defaults to `sideBar.background`**, a workbench colour
 standalone Monaco never registers. Unset, the collapsed-region bars render unstyled.
