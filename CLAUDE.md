@@ -35,6 +35,7 @@ fixtures/           make-sample-repo.sh — generates the two test repos
 docs/               README screenshots + capture-screenshots.mjs, which regenerates them
 tools/              ccd-review.mjs (what an agent runs at the end of an iteration) +
                     ccd-session-start.sh (the base it measures from) + verify-deeplink.mjs
+.claude/skills/     open-review — the wrapper that makes an agent run the opener. No logic.
 m1-spike/           throwaway CDN spike, kept as historical evidence. Not built or tested.
 start.sh            runs both halves in one terminal; the launcher the README leads with
 ```
@@ -330,6 +331,21 @@ selections, which is what `tools/verify-deeplink.mjs` asserts rather than trusti
 And the query is built by hand while it is *read* with `URLSearchParams`: reading, that class's
 `+`-means-space rule cannot bite because every producer percent-encodes; writing, it would corrupt
 a filesystem path.
+
+**Adding a deep-link parameter is five places, and the third is the one that gets forgotten.**
+`deeplink.ts` (both halves — they are in one file precisely so this is one edit), the line in
+`shell.ts` that consumes it and names *which default it overrides*, `deepLink()` in
+`tools/ccd-review.mjs` if the opener should emit it, the README's deep-link block, and a check in
+`tools/verify-deeplink.mjs` — a parameter nothing asserts is a parameter that can stop working
+silently, which is the failure mode this whole feature is prone to. **Do not validate its shape in
+`deeplink.ts`**: carry it through untouched and let the route that owns it reject it, the way `ref`
+and `shas` already do. A second copy of a validation rule is the drift hazard, and the error path
+already exists.
+
+Where the opener is extended is `open()` in `ccd-review.mjs` — one function, currently Orca then
+`xdg-open`, and the only place that knows how a review reaches a human. Adding an editor or a
+different browser goes there and nowhere else; note that failing to open is deliberately a warning
+rather than an error, because the URL on stdout is the part a caller can act on.
 
 **A deep link's repository never falls back to recents or `defaultRepoId`.** `boot()` branches once
 (`link ? api.registerRepo(link.repoPath) : preferredRepo(await api.repos())`) and reports the

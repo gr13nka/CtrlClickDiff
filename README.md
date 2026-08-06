@@ -366,8 +366,21 @@ when the session began, and the tool then reviews exactly what the session added
 }
 ```
 
-Add a `Stop` hook running `node /path/to/CtrlClickDiff/tools/ccd-review.mjs` too, and the review
-opens on its own at the end of every turn, with the agent doing nothing.
+**Opening it without the agent's help.** A `Stop` hook runs the opener at the end of every turn,
+so the review appears whether or not the agent remembers to ask for it:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node /path/to/CtrlClickDiff/tools/ccd-review.mjs" }] }
+    ]
+  }
+}
+```
+
+Both hooks are safe to install together — the session hook only records a SHA, and the opener
+exits quietly (code 2) on a turn that committed nothing.
 
 > Worktrees have to sit inside `CCD_BROWSE_ROOT` (default `$HOME`) — Orca's own live under
 > `~/orca/workspaces`, so that works out of the box. A worktree elsewhere needs
@@ -437,6 +450,29 @@ that *was* the tip — a hand-built multi-commit selection is deliberately left 
 **`pnpm smoke` fails.**
 A grammar's WASM didn't load — the failure names which one. Confirm the file exists under
 `vendor/` and that `node --version` is `v22.x`; see `vendor/README.md` to rebuild it.
+
+**`ccd-review.mjs` exits 2 and opens nothing.**
+The iteration left no commits. That's the honest answer, not a bug: both sides of a diff have to
+be revisions that already exist, so an uncommitted working tree is nothing this can show. Commit,
+then run it again. Don't reach for `--base` to manufacture a range — it will show you commits the
+iteration didn't make.
+
+**It reviews far more commits than the iteration made.**
+No session base was recorded, so it fell back to "everything since this branch left the default
+branch". Install `tools/ccd-session-start.sh` as a `SessionStart` hook (above), or pass
+`--base=<rev>`. If the hook *is* installed and the base still looks wrong, check that the hook and
+the tool agree on `XDG_CACHE_HOME` — they key the recorded SHA by it.
+
+**The link opens, but the header says "Choose repository…".**
+The backend refused the path and the status line says why — usually outside `CCD_BROWSE_ROOT`, or
+a path that no longer exists. It deliberately does not fall back to another repository: opening
+something other than what the link named would be a wrong answer with nothing on screen admitting
+it. Fix the path or widen `CCD_BROWSE_ROOT`, then reload.
+
+**The URL is printed but no tab appears.**
+Opening is best-effort: the link on stdout is the part that matters. Under Orca, check `orca status`
+— the opener uses `orca tab create` and falls back to `xdg-open`, which needs a desktop session.
+Paste the URL into a browser meanwhile.
 
 ## What it deliberately does not do
 
@@ -539,6 +575,7 @@ fixtures/           make-sample-repo.sh — the reproducible test repos
 docs/               the screenshots used in this file
 tools/              ccd-review.mjs (open a review of an iteration's commits) and its hook,
                     plus verify-deeplink.mjs
+.claude/skills/     open-review — what tells a Claude Code agent to run the opener
 m1-spike/           a throwaway CDN spike that proved peek-in-diff before any real code
 ```
 
