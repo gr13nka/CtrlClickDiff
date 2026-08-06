@@ -24,6 +24,7 @@ packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (wha
 packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
                     diff.ts (one file's editor) defprovider.ts api.ts
                     peekscope.ts (the review, as seen by peek's candidate list)
+                    deeplink.ts (the review as a URL — parse and serialize, an inverse pair)
                     topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
                     filetree.ts repopicker.ts live.ts theme.ts
                     modal.ts (backdrop/aria/Escape for all three dialogs)
@@ -32,6 +33,8 @@ packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review c
 vendor/             12 prebuilt grammar wasms + build-grammars.sh, provenance in vendor/README.md
 fixtures/           make-sample-repo.sh — generates the two test repos
 docs/               README screenshots + capture-screenshots.mjs, which regenerates them
+tools/              ccd-review.mjs (what an agent runs at the end of an iteration) +
+                    ccd-session-start.sh (the base it measures from) + verify-deeplink.mjs
 m1-spike/           throwaway CDN spike, kept as historical evidence. Not built or tested.
 start.sh            runs both halves in one terminal; the launcher the README leads with
 ```
@@ -63,6 +66,7 @@ pnpm typecheck                      # tsc --noEmit, strict, all 3 packages
 pnpm smoke                          # per-grammar matrix: every registered grammar loads, tags compile, sample captures
 bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
 node docs/capture-screenshots.mjs   # regenerates the README screenshots (app must be running)
+node tools/verify-deeplink.mjs      # the deep-link contract, in a real browser (app must be running)
 ```
 
 `pnpm smoke` (`packages/backend/src/smoke.ts`) is one matrix over every registered grammar key, not
@@ -308,6 +312,32 @@ stale crumbs cannot leak an old refname into a new-repo request — everything i
 same synchronous turn, so a click in that window opened a palette of 0 rows — but a crumb that
 opens an empty palette is the affordance-that-lies hazard `renderTrail` already guards against
 for the selection crumb.
+
+**`updateAddressBar` writes nothing until a repository is adopted, and that guard is what stops
+the feature from destroying its own input.** It hangs off `renderTrail()`, which `initShell()` calls
+**synchronously before `void boot()`** — so an unconditional write would replace an incoming deep
+link with an empty URL in that same tick, before `boot()`'s `parseDeepLink(location.search)` line
+ever ran. `repo` stays `null` until `adoptRepo()`, which is reached only after `parseDeepLink` has
+already returned, so every call that could clobber a link is by construction one with an empty
+`repoPath`. Do not "simplify" this into an ordering rule at the call site: the no-op is also simply
+true (a review with no repository is not worth linking to), and a structural guard cannot be
+undone by someone moving a line.
+
+Two smaller facts in the same file. `replaceState`, never `pushState` — the URL mirrors state
+rather than recording a navigation, and on push the Back button would rewind the reader's own
+selection history instead of leaving the page (measured as `history.length` unchanged across two
+selections, which is what `tools/verify-deeplink.mjs` asserts rather than trusting the source).
+And the query is built by hand while it is *read* with `URLSearchParams`: reading, that class's
+`+`-means-space rule cannot bite because every producer percent-encodes; writing, it would corrupt
+a filesystem path.
+
+**A deep link's repository never falls back to recents or `defaultRepoId`.** `boot()` branches once
+(`link ? api.registerRepo(link.repoPath) : preferredRepo(await api.repos())`) and reports the
+backend's own refusal text on failure. Falling through would open a *different* repository than the
+one the reader followed a link to, with nothing on screen saying so — the same class of wrong-answer
+-dressed-as-right as the pre-`--diff-merges` merge commit. The regression is invisible to any test
+that checks only "did something load", which is why `verify-deeplink.mjs` asserts the repo crumb
+still reads `Choose repository…` after a refused link.
 
 **`modelUri` and `parseModelUri` are an inverse pair and live together in `diff.ts`.** Splitting
 them (the parse used to sit in `defprovider.ts`) makes the segment layout a two-file edit whose
@@ -701,6 +731,26 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   `registerDefinitions` rather than imported, so that file keeps having no ambient state of
   its own — a resolution belongs to the model it started from, the review it is judged against
   belongs to the shell.
+- **`selection` comes from `/api/preview`'s own records, not from `selectCommits`'s caller.** The
+  caller-supplied version worked exactly when the caller already had metadata — true for a palette
+  pick, false for a selection named from outside the app, where a fresh page load has nothing to look
+  anything up in. `orderCommits` had to run `git log --no-walk` over the selection anyway (that call
+  is what sorts it and proves each sha exists), so asking it for the record format instead of `%H`
+  adds no process and no round trip, and answers for any commit in the object database — including
+  one older than the ref's 100-commit page or no longer on the ref at all. This is why
+  `loadCommits(initialShas)` may hand `selectCommits` bare SHAs wearing empty metadata: those
+  placeholders cannot reach the screen.
+- **The end-of-iteration opener is a CLI, and the skill is a wrapper with no logic in it.**
+  `tools/ccd-review.mjs` is what an agent runs when it finishes; `.claude/skills/open-review/`
+  only says to run it and how to read its exit codes. An MCP server was considered and declined —
+  every agent can already run a shell command, so it would buy a second process, a config entry per
+  agent and another thing to be down, for nothing. Exit **2** (no commits) is not a failure and must
+  stay distinct from **1**: both sides of a preview are revisions that already exist, so an
+  uncommitted tree is genuinely not reviewable here, and an agent needs to say that rather than
+  invent a range. One coupling to know about: `ccd-session-start.sh` (a `sh` hook) and
+  `ccd-review.mjs` (Node) must agree on `XDG_CACHE_HOME` **and** on the 16-hex-digit sha256 of the
+  worktree path, or the writer files the session base where the reader never looks and the base
+  silently degrades to `merge-base` — verified by running both, not by reading them.
 - **Light mode is out of scope**, and `api.prewarm` was deleted rather than revived. Auto-prewarm
   on commit select stays disabled — see the comment in `selectCommit`; on a large repo behind a
   blobless partial clone it triggers thousands of on-demand blob fetches.

@@ -24,6 +24,7 @@ inline, without leaving the diff. Esc closes it and puts you back.*
 - [Run it](#run-it)
 - [Try it in two minutes](#try-it-in-two-minutes)
 - [How to use it](#how-to-use-it)
+- [Review from an agent](#review-from-an-agent)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
 - [What it deliberately does not do](#what-it-deliberately-does-not-do)
@@ -327,6 +328,66 @@ two-revision representation, so the skipped commit's edits are unavoidably insid
 Those files get a **⚠** — on the sidebar row and on the file's own header — whose tooltip names the
 commits responsible, by subject.
 
+## Review from an agent
+
+A coding agent that just finished an iteration can open the review of *its own commits* in
+front of you:
+
+```bash
+node tools/ccd-review.mjs
+```
+
+It works out what the iteration committed, registers the worktree with the backend, prints the
+review URL and opens it — as a tab inside [Orca](https://github.com/stablyai/orca)'s embedded
+browser when you're running under Orca, so the review lands beside the worktree it belongs to,
+and in your desktop browser otherwise. Under Claude Code, `.claude/skills/open-review/` is the
+skill that tells the agent to run it.
+
+Its exit code is the interface, because the caller is a program: **0** the review is open,
+**2** the iteration left no commits (CtrlClickDiff reviews commits — an uncommitted working
+tree isn't something it can show), **1** a real failure, with the reason on stderr.
+
+Flags: `--base=<rev>` to review since a specific revision, `--shas=a,b` for exactly those
+commits, `--no-open` to just print the URL, `--json` for the whole answer.
+
+**Sharpening "this iteration".** Without help, the tool reviews everything since your branch
+left the default branch — right for a fresh worktree, wider than one iteration on a long-lived
+branch. Installing `tools/ccd-session-start.sh` as a `SessionStart` hook records where HEAD was
+when the session began, and the tool then reviews exactly what the session added. In
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "/path/to/CtrlClickDiff/tools/ccd-session-start.sh" }] }
+    ]
+  }
+}
+```
+
+Add a `Stop` hook running `node /path/to/CtrlClickDiff/tools/ccd-review.mjs` too, and the review
+opens on its own at the end of every turn, with the agent doing nothing.
+
+> Worktrees have to sit inside `CCD_BROWSE_ROOT` (default `$HOME`) — Orca's own live under
+> `~/orca/workspaces`, so that works out of the box. A worktree elsewhere needs
+> `CCD_BROWSE_ROOT` set to cover it; the tool relays the backend's refusal verbatim when it
+> doesn't.
+
+### Deep links
+
+That URL is just a link, and you can build or share one yourself. Every review has one, and the
+address bar always holds the current one — copy it, and whoever opens it sees the same review:
+
+```
+http://localhost:5173/?path=<absolute repo path>&ref=refs/heads/<branch>&shas=<sha>,<sha>
+```
+
+Only `path` is required; `ref` and `shas` fall back to the branch HEAD is on and its newest
+commit. The repository is named by **path**, not by id: the backend's registry lives in memory,
+so ids don't survive a restart while a path always re-registers to the same one. A link whose
+repository the backend refuses reports why and stops — it never quietly opens a different one.
+
 ## Configuration
 
 All optional, all environment variables:
@@ -476,6 +537,8 @@ packages/frontend   Vite + Monaco; shell.ts, diff.ts, defprovider.ts, and one mo
 vendor/             12 prebuilt grammar wasms + build-grammars.sh (how to rebuild them)
 fixtures/           make-sample-repo.sh — the reproducible test repos
 docs/               the screenshots used in this file
+tools/              ccd-review.mjs (open a review of an iteration's commits) and its hook,
+                    plus verify-deeplink.mjs
 m1-spike/           a throwaway CDN spike that proved peek-in-diff before any real code
 ```
 
@@ -483,6 +546,7 @@ m1-spike/           a throwaway CDN spike that proved peek-in-diff before any re
 pnpm typecheck                      # tsc --noEmit, strict, all three packages
 pnpm smoke                          # asserts every registered grammar loads with a matching ABI
 bash fixtures/make-sample-repo.sh   # regenerate the fixture repos
+node tools/verify-deeplink.mjs      # the deep-link contract, in a real browser (app must be running)
 ```
 
 There is **no test runner** — behaviour is verified in a real browser, because most of what matters
