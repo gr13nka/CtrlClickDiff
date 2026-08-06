@@ -25,6 +25,7 @@ import { api } from './api';
 import { initBand, type Band } from './band';
 import { openBranchPalette } from './branchpalette';
 import { openCommitPalette } from './commitpalette';
+import { parseDeepLink, type DeepLinkRequest } from './deeplink';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
@@ -260,22 +261,36 @@ export function initShell(rootEl: HTMLElement): void {
  * the boot REPO_ROOT as `defaultRepoId`, which is what keeps single-repo
  * behaviour identical to before any of this existed — start the backend with
  * REPO_ROOT, get that repo.
+ *
+ * A deep link overrides all of that, and does NOT fall back to it. A link that
+ * names a repository this backend refuses must not quietly open a different one
+ * — the reader would be reviewing something other than what they followed a
+ * link to, with nothing on screen saying so. The backend's own refusal text is
+ * reported instead, and the repo crumb still offers the picker.
  */
 async function boot(): Promise<void> {
   const e = beginEpoch();
   setStatus('Loading repository…');
 
-  let listing: ReposListing;
+  // Read before anything can overwrite it. updateAddressBar() hangs off
+  // renderTrail(), which initShell() has already called once by now — it no-ops
+  // while no repo is adopted, and this line is why that guard matters.
+  const link = parseDeepLink(window.location.search);
+
+  let entry: RepoEntry | null;
   try {
-    listing = await api.repos();
+    // A link and "the repository I had open last" are mutually exclusive
+    // intents; merging them is how a link silently opens the wrong repo.
+    entry = link ? await api.registerRepo(link.repoPath) : await preferredRepo(await api.repos());
   } catch (err) {
     if (stale(e)) return;
-    setStatus(`Error loading repositories: ${errorMessage(err)}`);
+    setStatus(
+      link
+        ? `Cannot open ${link.repoPath} from the link: ${errorMessage(err)}`
+        : `Error loading repositories: ${errorMessage(err)}`,
+    );
     return;
   }
-  if (stale(e)) return;
-
-  const entry = await preferredRepo(listing);
   if (stale(e)) return;
   if (!entry) {
     setStatus('No repository configured. Start the backend with REPO_ROOT set.');
@@ -283,7 +298,7 @@ async function boot(): Promise<void> {
   }
 
   adoptRepo(entry);
-  await loadRepoRefs();
+  await loadRepoRefs(link);
 }
 
 /**
@@ -429,7 +444,9 @@ function renderTrail(): void {
       // The full refname, because the display name does not identify a ref: a
       // local branch may be called `origin/main`, which renders exactly as the
       // remote-tracking `refs/remotes/origin/main` does.
-      title: `${branch.ref} — click to switch branch`,
+      title: linkRefMissing
+        ? `${branch.ref} — the link named ${linkRefMissing}, which this repository does not have`
+        : `${branch.ref} — click to switch branch`,
       onClick: () =>
         openBranchPalette({
           branches,
@@ -543,10 +560,49 @@ export async function revealPath(path: string, line?: number, rev?: string): Pro
  * and only `loadBranches()` can establish it. Skipping the commit load when the
  * branch load failed is the same invariant seen from the other side: there is no
  * ref to ask for.
+ *
+ * `link`, when a deep link named one, overrides the two defaults that sequence
+ * would otherwise pick: HEAD's branch and its newest commit. It rides through as
+ * a parameter rather than as a second load path — every request below is the one
+ * the app already makes, so a link's bad ref or bad SHA lands in the error
+ * handling that already exists for a hand-made selection.
  */
-async function loadRepoRefs(): Promise<void> {
-  if (await loadBranches()) await loadCommits();
+async function loadRepoRefs(link?: DeepLinkRequest | null): Promise<void> {
+  if (!(await loadBranches())) return;
+  applyLinkedRef(link);
+  await loadCommits(link?.shas ?? undefined);
 }
+
+/**
+ * The ref a deep link named, if this repository has it.
+ *
+ * Runs between `loadBranches()` (which has just set `selectedRef` to HEAD's
+ * branch) and `loadCommits()` (which reads it), so it is an override of an
+ * already-valid value and never the thing that establishes one. Synchronous, so
+ * it needs no epoch of its own, for the reason `selectBranch` does not either:
+ * nothing awaits between it and the load that follows.
+ *
+ * A ref the repository does not have leaves the reader on HEAD and is reported
+ * on the branch crumb rather than in the status line — `loadCommits()` writes
+ * "Loading commits…" on its very next line, so a status written here would be
+ * gone within the tick. The crumb is also where someone checks "am I on the
+ * branch that link named".
+ */
+function applyLinkedRef(link?: DeepLinkRequest | null): void {
+  if (!link?.ref) return;
+  const target = branches.find((b) => b.ref === link.ref);
+  if (!target) {
+    linkRefMissing = link.ref;
+    return;
+  }
+  selectedRef = target.ref;
+}
+
+// The ref a deep link named that this repository does not have, or '' when the
+// link's ref was honoured (or there was none). Read by renderTrail() for the
+// branch crumb's tooltip; cleared by selectBranch, because a branch picked by
+// hand supersedes a stale link.
+let linkRefMissing = '';
 
 /**
  * Fills the branch picker from the current repo and selects HEAD's branch.
@@ -595,6 +651,7 @@ async function loadBranches(): Promise<boolean> {
 async function selectBranch(ref: string): Promise<void> {
   if (ref === selectedRef) return;
   selectedRef = ref;
+  linkRefMissing = '';
   renderTrail();
   await loadCommits();
 }
@@ -612,8 +669,15 @@ async function selectBranch(ref: string): Promise<void> {
  * 400 — where the fallback would quietly list HEAD's commits underneath a
  * branch picker naming something else, which in a review tool is a wrong answer
  * dressed as a right one.
+ *
+ * `initialShas` opens that selection instead of the newest commit. They are
+ * handed on as bare SHAs wearing empty metadata, which never reaches the screen:
+ * `selectCommits` takes the selection it renders from `/api/preview`'s own
+ * records, so a linked commit older than this page of the log still arrives with
+ * its subject — and one that does not exist is one clean 404 rather than a row
+ * of blanks.
  */
-async function loadCommits(): Promise<void> {
+async function loadCommits(initialShas?: string[]): Promise<void> {
   const e = beginEpoch();
   setStatus('Loading commits…');
   let loaded: CommitInfo[];
@@ -634,7 +698,7 @@ async function loadCommits(): Promise<void> {
     return;
   }
 
-  await selectCommits([newest]);
+  await selectCommits(initialShas?.length ? initialShas.map(placeholderCommit) : [newest]);
 }
 
 /**
@@ -734,6 +798,19 @@ async function refreshRefs(): Promise<void> {
 
 function sameSelection(a: CommitInfo[], b: CommitInfo[]): boolean {
   return a.length === b.length && a.every((commit, i) => commit.sha === b[i]?.sha);
+}
+
+/**
+ * A SHA with no metadata yet, for asking `selectCommits` about a commit this
+ * session has never listed — which is every commit a deep link names.
+ *
+ * The blank fields are never rendered: `selectCommits` replaces the whole
+ * selection with `/api/preview`'s records before it paints. Inventing plausible
+ * text here instead would be the thing that *could* reach the screen, and it
+ * would be a lie about which commit the reader is looking at.
+ */
+function placeholderCommit(sha: string): CommitInfo {
+  return { sha, subject: '', author: '', date: '' };
 }
 
 /**
