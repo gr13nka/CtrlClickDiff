@@ -28,12 +28,17 @@ const PEEK_OPTIONS: monaco.editor.IEditorOptions = {
   }
 };
 
-// Every editor currently on screen. The band creates and disposes these as
-// cards scroll in and out of reach, so a view preference has to reach all of
-// them at once — and a card that was away while a toggle flipped has to come
-// back in the new mode, which is why viewOptions() is also spread into the
-// construction bag below.
-const liveEditors = new Set<monaco.editor.IStandaloneDiffEditor>();
+// Every editor currently on screen, against the status of the file it shows.
+// The band creates and disposes these as cards scroll in and out of reach, so a
+// view preference has to reach all of them at once — and a card that was away
+// while a toggle flipped has to come back in the new mode, which is why
+// viewOptions() is also spread into the construction bag below.
+//
+// A Map rather than a Set because viewOptions() is a function of the file's
+// status as well as the preferences: an added or deleted file is always one
+// pane. Without the status here, the next toggle would push a bare
+// `renderSideBySide: sideBySide` over that and put the empty pane back.
+const liveEditors = new Map<monaco.editor.IStandaloneDiffEditor, FileStatus>();
 
 // ---------------------------------------------------------------------------
 // View preferences
@@ -61,10 +66,21 @@ const COLLAPSE_KEY = 'ccd.collapseUnchanged';
 // a 120-line file with a two-line edit is 118 lines of scrolling past nothing.
 let collapseUnchanged = readStored(COLLAPSE_KEY) !== 'off';
 
-/** The editor options the current preferences add up to. */
-function viewOptions(): monaco.editor.IDiffEditorOptions {
+/**
+ * The editor options the current preferences add up to, for a file of `status`.
+ *
+ * Side-by-side is a preference for a *modified* file and a mistake for the other
+ * two. An added file has no "before" and a deleted one has no "after", so one of
+ * the two panes holds nothing and Monaco fills it with diagonal hatch — measured
+ * on this repo's own `deeplink.ts`, 1,195,936 px² of hatch against 1,141,200 px²
+ * of visible card, i.e. the majority of the card spent saying "there is nothing
+ * here" while the half holding all the content was squeezed to 633px and clipped
+ * every one of its 113 lines. There is nothing to compare; do not draw a
+ * comparison.
+ */
+function viewOptions(status: FileStatus): monaco.editor.IDiffEditorOptions {
   return {
-    renderSideBySide: sideBySide,
+    renderSideBySide: sideBySide && status === 'M',
     hideUnchangedRegions: {
       enabled: collapseUnchanged,
       // Three lines each side of a change, which is `git diff -U3` and what
@@ -85,7 +101,7 @@ function viewOptions(): monaco.editor.IDiffEditorOptions {
 
 /** No-op while nothing is mounted: the construction option bag carries the same values. */
 function applyViewOptions(): void {
-  for (const editor of liveEditors) editor.updateOptions(viewOptions());
+  for (const [editor, status] of liveEditors) editor.updateOptions(viewOptions(status));
 }
 
 /** Whether the diff is rendering side-by-side. For the sidebar's toggle. */
@@ -199,14 +215,14 @@ export async function createFileDiff(
     // Spread rather than restated, so the persisted preferences — and any
     // toggle flipped while this card was unmounted — are already in force on
     // the first paint instead of flipping a frame after it.
-    ...viewOptions()
+    ...viewOptions(spec.status)
   });
 
   editor.getOriginalEditor().updateOptions(PEEK_OPTIONS);
   editor.getModifiedEditor().updateOptions(PEEK_OPTIONS);
 
   editor.setModel({ original, modified });
-  liveEditors.add(editor);
+  liveEditors.set(editor, spec.status);
 
   // Auto-height. IDiffEditor has no onDidContentSizeChange of its own — it
   // extends IEditor, not ICodeEditor (monaco.d.ts:6410) — so the signal has to
