@@ -199,6 +199,11 @@ export function initShell(rootEl: HTMLElement): void {
 
   const status = document.createElement('div');
   status.className = 'ccd-status';
+  // role=status is a polite live region, so a message written here is announced
+  // without interrupting. Polite and not assertive deliberately: this slot
+  // carries "Loading commits…" as often as it carries a failure, and an
+  // assertive region would cut across the reader on every routine fetch.
+  status.role = 'status';
   statusEl = status;
 
   const list = document.createElement('ul');
@@ -257,7 +262,7 @@ export function initShell(rootEl: HTMLElement): void {
         selected: selection,
         onApply: (next) => void selectCommits(next)
       }),
-    onError: (path, err) => setStatus(`Error loading ${path}: ${errorMessage(err)}`)
+    onError: (path, err) => setStatus(`Error loading ${path}: ${errorMessage(err)}`, 'error')
   });
 
   void boot();
@@ -635,7 +640,7 @@ async function loadBranches(): Promise<boolean> {
     loaded = await api.branches(requireRepoId());
   } catch (err) {
     if (stale(e)) return false;
-    setStatus(`Error loading branches: ${errorMessage(err)}`);
+    setStatus(`Error loading branches: ${errorMessage(err)}`, 'error');
     return false;
   }
   if (stale(e)) return false;
@@ -702,7 +707,7 @@ async function loadCommits(initialShas?: string[]): Promise<void> {
     loaded = await api.commits(requireRepoId(), selectedRef);
   } catch (err) {
     if (stale(e)) return;
-    setStatus(`Error loading commits: ${errorMessage(err)}`);
+    setStatus(`Error loading commits: ${errorMessage(err)}`, 'error');
     return;
   }
   if (stale(e)) return;
@@ -848,7 +853,7 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
     result = await api.preview(requireRepoId(), next.map((c) => c.sha));
   } catch (err) {
     if (stale(e)) return;
-    setStatus(`Error loading commit: ${errorMessage(err)}`);
+    setStatus(`Error loading commit: ${errorMessage(err)}`, 'error');
     return;
   }
   if (stale(e)) return;
@@ -1071,7 +1076,7 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
 
   const open = (): void => {
     revealPath(node.path).catch((err: unknown) => {
-      setStatus(`Error loading diff: ${errorMessage(err)}`);
+      setStatus(`Error loading diff: ${errorMessage(err)}`, 'error');
     });
   };
 
@@ -1118,8 +1123,23 @@ function highlightActiveRow(): void {
   }
 }
 
-function setStatus(message: string): void {
-  if (statusEl) statusEl.textContent = message;
+/**
+ * Whether a status line is reporting progress or a failure.
+ *
+ * One slot carries both — "Loading commits…" and "Error loading diff: …" — and
+ * until this existed they were the same muted grey 12px text, so a request that
+ * had failed looked exactly like one still running. A reader waiting on the
+ * first has no reason to suspect the second.
+ */
+type StatusKind = 'info' | 'error';
+
+function setStatus(message: string, kind: StatusKind = 'info'): void {
+  if (!statusEl) return;
+  statusEl.textContent = message;
+  // Colour is the redundant half here, never the carrier: every message that
+  // passes 'error' already begins with the word, so the two agree rather than
+  // the red having to be noticed.
+  statusEl.classList.toggle('ccd-status-error', kind === 'error');
 }
 
 function errorMessage(err: unknown): string {

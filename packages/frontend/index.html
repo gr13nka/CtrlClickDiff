@@ -339,6 +339,16 @@
         font-size: 12px;
       }
 
+      /* One slot carries progress and failure both, and at the muted grey above
+         they were the same thing to look at: a request that had died read
+         exactly like one still running. The word "Error" already leads every
+         message that gets this class, so the colour is the redundant half and
+         never the carrier — which is what keeps it working for a reader who
+         cannot separate red from grey. */
+      .ccd-status-error {
+        color: var(--ccd-danger);
+      }
+
       .ccd-file-list {
         flex: 1 1 auto;
         margin: 0;
