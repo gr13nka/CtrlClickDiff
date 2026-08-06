@@ -100,6 +100,18 @@ export interface Preview {
   /** The selection, newest-first, resolved to full 40-char SHAs. */
   shas: string[];
   /**
+   * One `CommitInfo` per entry of `shas`, in the same order.
+   *
+   * Read straight off the git objects the selection names, which is what makes
+   * this the authoritative source rather than a convenience: `GET /api/commits`
+   * answers for one ref's newest `COMMIT_LOG_LIMIT` commits, and a selection may
+   * legitimately name a commit outside that page — an older one, or one that is
+   * no longer on the ref at all. A client that reconstructs subjects by looking
+   * SHAs up in a commit list it already has is right only for the commits that
+   * happen to still be listed.
+   */
+  commits: CommitInfo[];
+  /**
    * The revision pair for a path that is NOT in `files` — the newest selected
    * commit, and the first parent of the oldest selected commit.
    *

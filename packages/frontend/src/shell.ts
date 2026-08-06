@@ -736,10 +736,6 @@ function sameSelection(a: CommitInfo[], b: CommitInfo[]): boolean {
   return a.length === b.length && a.every((commit, i) => commit.sha === b[i]?.sha);
 }
 
-function isCommit(commit: CommitInfo | undefined): commit is CommitInfo {
-  return commit !== undefined;
-}
-
 /**
  * Resolves a selection of commits into its changed files, then renders both the
  * sidebar tree and the band of diffs.
@@ -763,11 +759,12 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
   }
   if (stale(e)) return;
 
-  // Reordered into the backend's canonical newest-first order. `byShaOrder`
-  // keeps the CommitInfo the caller supplied — the backend answers in SHAs, and
-  // the metadata behind them is what the header and palette render.
-  const bySha = new Map(next.map((c) => [c.sha, c]));
-  selection = result.shas.map((sha) => bySha.get(sha)).filter(isCommit);
+  // The backend's own records, not the caller's: already newest-first, and read
+  // straight off the git objects, so a commit outside the ref's listed page
+  // still arrives with its subject. Trusting `next` instead worked only for
+  // commits the caller had metadata for — true for a palette pick, false for a
+  // selection named from outside the app.
+  selection = result.commits;
   spanRevs = { headSha: result.spanHeadSha, baseSha: result.spanBaseSha };
   files = result.files;
   activePath = '';

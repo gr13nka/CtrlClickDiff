@@ -239,10 +239,25 @@ export interface CommitChanges {
  * how a selection naming a commit this repository does not have — a stale tab
  * after a force-push, most often — becomes one clean rejection rather than a
  * preview quietly computed from whichever commits happened to survive.
+ *
+ * Returning full `CommitInfo` and not bare SHAs is the third job, and it costs
+ * nothing: this call has to happen anyway, so asking it for four fields instead
+ * of one adds no process and no round trip. It is also the only place a
+ * selection's metadata can come from in general — `listCommits` answers for one
+ * ref's newest `COMMIT_LOG_LIMIT` commits, and a selection may name a commit
+ * outside that page (an older one, or one no longer on the ref at all), for
+ * which the log has nothing to say.
  */
-export async function orderCommits(repoRoot: string, shas: string[]): Promise<string[]> {
-  const stdout = await run(repoRoot, ['log', '--no-walk', '--format=%H', '--end-of-options', ...shas, '--']);
-  return stdout.split('\n').filter(Boolean);
+export async function orderCommits(repoRoot: string, shas: string[]): Promise<CommitInfo[]> {
+  const stdout = await run(repoRoot, [
+    'log',
+    '--no-walk',
+    COMMIT_RECORD_FORMAT,
+    '--end-of-options',
+    ...shas,
+    '--',
+  ]);
+  return parseCommitRecords(stdout);
 }
 
 /**
