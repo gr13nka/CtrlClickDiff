@@ -28,5 +28,33 @@ declare module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneService
      * `StandaloneServices.get`, which every `createModel` goes through.
      */
     initialize(overrides: editor.IEditorOverrideServices): unknown;
+
+    /**
+     * Resolves a service by its decorator, initializing the container with no
+     * overrides if nothing has yet.
+     *
+     * The identifier is opaque here on purpose — typing it would mean
+     * transcribing Monaco's `ServiceIdentifier`, and the only caller
+     * (peeklayout.ts) immediately narrows the result to the one interface it
+     * uses.
+     */
+    get<T>(id: unknown): T;
   };
+}
+
+declare module 'monaco-editor/esm/vs/platform/storage/common/storage.js' {
+  /**
+   * Decorator for the key-value store the peek reads its saved layout back from
+   * on every open (referencesController.js:85-86). Standalone Monaco backs it
+   * with `InMemoryStorageService`, so nothing stored here outlives the tab.
+   *
+   * `StorageScope` and `StorageTarget` are deliberately absent: they are const
+   * enums, so Monaco's build inlines them as bare numbers and the module does
+   * not export them at runtime (its export list is
+   * AbstractStorageService, IStorageService, InMemoryStorageService, TARGET_KEY,
+   * WillSaveStateReason, loadKeyTargets). Declaring them here would typecheck
+   * and then be `undefined` in the browser. Callers pass the literals, the way
+   * Monaco's own transpiled call sites do.
+   */
+  export const IStorageService: unknown;
 }

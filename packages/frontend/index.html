@@ -811,6 +811,45 @@
         box-shadow: 0 8px 24px var(--ccd-shadow);
       }
 
+      /* A peek with ONE definition has no choice to present, so its candidate
+         list is dead weight — measured at 184px of a 612px widget, holding a
+         single row that repeated the line the preview was already showing.
+         peeklayout.ts hands most of that back by seeding Monaco's stored split
+         ratio, but SplitView clamps the list to `minimumSize: 100`
+         (referencesWidget.js:346), so 100px survives whatever ratio is asked
+         for. Left alone it rendered a code line chopped mid-word against the
+         widget's edge — the "reads as broken rather than deliberate" failure
+         peekscope.ts already argues about for row labels, so this is measured
+         rather than assumed: it was seen at 100px before these rules existed.
+
+         Hiding the rows and painting the remainder to match the preview is what
+         turns the floor into margin. The colour is theme.ts's, published for
+         this rule alone — its whole job is to equal `peekViewEditor.background`,
+         the same reasoning that keeps --ccd-diff-inserted-line there.
+
+         The condition is read off the widget's OWN content — one row in the
+         list, so nothing to choose between — and that is a correctness
+         property, not a stylistic one. The first version of this set a flag on
+         <html> from the definition provider, and it raced: Monaco resolves on
+         Ctrl+hover as well as on click, the peek's preview is itself an editor
+         with the provider registered, so a Ctrl+hover INSIDE an open peek
+         rewrote the flag and the hidden list reappeared under the reader.
+         Measured, not feared — sole:true/treeVisible:false flipped to
+         sole:false/treeVisible:true with the widget still open. A selector that
+         describes the widget cannot disagree with the widget.
+
+         No `:has()` circularity here: `display: none` changes the box tree, and
+         selectors match the DOM tree, so the row this depends on keeps matching
+         after it is hidden. (Verified in the browser, because getting it wrong
+         would flip-flop rather than fail.) */
+      .ccd-card .zone-widget .ref-tree:has(.monaco-list-rows > .monaco-list-row:only-child) {
+        background: var(--ccd-peek-surface);
+      }
+
+      .ccd-card .zone-widget .ref-tree:has(.monaco-list-rows > .monaco-list-row:only-child) > * {
+        display: none;
+      }
+
       /* Placeholder text for a card whose editor has not arrived yet. On the
          ::after rather than as a child node, so the loading state cannot collide
          with the element Monaco is about to mount into. */

@@ -22,6 +22,19 @@ const DIFF_INSERTED_LINE = '#3fb95020';
 const DIFF_REMOVED_LINE = '#f8514920';
 
 /**
+ * The peek's own raised surface, published for the same reason as the two above.
+ *
+ * When a peek has a single definition there is no choice to present, so
+ * peeklayout.ts collapses the candidate list — and the 100px SplitView floor it
+ * cannot go below has to be painted to match the preview beside it, or the
+ * widget ends in a strip that reads as a pane which failed to load. Nothing in
+ * the theme reaches that gap, so the rule lives in index.html and the value
+ * lives here: it has no meaning except "whatever `peekViewEditor.background`
+ * is", and a copy of it in the stylesheet is a copy free to drift.
+ */
+const PEEK_SURFACE = '#161b22';
+
+/**
  * Defines and activates the app's Monaco theme. Call once, before any editor
  * is constructed.
  *
@@ -104,9 +117,9 @@ export function installTheme(): void {
       'peekViewTitle.background': '#161b22',
       'peekViewTitleLabel.foreground': '#e6edf3',
       'peekViewTitleDescription.foreground': '#8b949e',
-      'peekViewEditor.background': '#161b22',
-      'peekViewEditorGutter.background': '#161b22',
-      'peekViewEditorStickyScroll.background': '#161b22',
+      'peekViewEditor.background': PEEK_SURFACE,
+      'peekViewEditorGutter.background': PEEK_SURFACE,
+      'peekViewEditorStickyScroll.background': PEEK_SURFACE,
       'peekViewResult.background': '#0d1117',
       'peekViewResult.fileForeground': '#e6edf3',
       'peekViewResult.lineForeground': '#8b949e',
@@ -214,6 +227,7 @@ export function installTheme(): void {
   // block it belongs to is worse than one left alone, and nothing would catch
   // the two drifting apart.
   const root = document.documentElement.style;
+  root.setProperty('--ccd-peek-surface', PEEK_SURFACE);
   root.setProperty('--ccd-diff-inserted-line', DIFF_INSERTED_LINE);
   root.setProperty('--ccd-diff-removed-line', DIFF_REMOVED_LINE);
 }
