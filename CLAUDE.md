@@ -26,6 +26,9 @@ packages/frontend   Vite + Monaco. shell.ts (all UI state)
                       and the empty state that replaces them)
                     diff.ts (one file's editor) defprovider.ts api.ts
                     peekscope.ts (the review, as seen by peek's candidate list)
+                    peeklayout.ts (how much of the peek goes to the answer)
+                    urilabel.ts (how a model URI is spelled out to a human)
+                    monaco-internal.d.ts (types for the one monaco internal we import)
                     deeplink.ts (the review as a URL — parse and serialize, an inverse pair)
                     topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
                     filetree.ts repopicker.ts live.ts theme.ts
@@ -279,6 +282,60 @@ unaffected (it isn't the worker), `ts.worker` never spawns with everything off, 
 them `needsTransparency`; an opaque tint paints over selection and search highlights inside a
 changed line.
 
+**An unset `peekView.border` is a saturated blue frame, because it is an alias of
+`editorInfo.foreground`.** `peekView.js:232` registers it that way and the dark default is
+`#3794ff` — measured **6.17:1** against the canvas, framing added lines that sit at **1.204:1**.
+Five times the contrast of the content, spent on chrome, which is exactly the rule index.html's
+palette comment states and the same defect the sidebar's `activePath` fill already had. It is now
+`--ccd-border` at 1.55:1. **The frame could not be quieted on its own**, and that pairing is the
+part to not undo: `peekViewEditor.background` was `#0d1117`, bit-identical to `editor.background`
+(measured 1.000:1), so the blue frame was the *only* thing saying "overlay". The peek now has its
+own raised surface (`#161b22`, 1.094:1 against the editor behind it) with the list recessed to
+canvas under it, and index.html carries the shadow — there is no theme key for one. Note the frame
+colour also paints `.peekview-widget > .body`'s `border-top` and the arrow, via `_applyStyles`, so
+one key covers all three. Raising the preview costs token contrast: `comment` `#8b949e` re-measured
+at **5.62:1** there. Move that surface again and re-measure it rather than assuming.
+
+**Ten of Monaco's thirteen `peekView*` keys were unset for the whole life of the app**, so the
+widget the tool is named after rendered half Primer and half VS Code — three different near-whites
+where `--ccd-fg` was meant, `#3399ff33` on the selected row beside the app's own `#1f6feb`, and
+`#ff8f0099` match highlighting, a 60%-alpha orange painted over the definition itself. Worth
+knowing when reading that block: `peekViewResult.selectionBackground` applies **only** to a focused
+list and a row without `.highlighted` (`referencesWidget.css:46`); outside that the generic
+`list.*` colours win, so setting one without the other leaves two different selection colours.
+
+**A `getUriLabel` override is what stops the peek printing the repo id and the SHA, and where it is
+called is load-bearing.** Standalone Monaco answers `uri.fsPath` for any `file:` URI
+(`standaloneServices.js:584-589`), and ours are `file://<repoId>/<rev>/<path>`, so the peek's title
+read `//ctrlclickdiff-66caac9c/c3ebf28e…/packages/frontend/src` — 89 characters where the directory
+belonged. It ellipsizes, so at the default side-by-side width the noise pushed the *filename* off
+its own title bar (`storag…  //ctrlclickdiff-…  - Definitio…`). `urilabel.ts` replaces the service;
+`main.ts` calls it **first, before anything else touches monaco**. Not a style preference:
+`StandaloneServices.initialize` is `if (initialized) return`, and it is not the only initializer —
+`StandaloneServices.get` initializes with no overrides when it arrives first
+(`standaloneServices.js:716-719`), and `registerDefinitionProvider` (`standaloneLanguages.js:375`),
+`registerEditorOpener` and every `createModel` all go through it. Placed beside `installTheme()` it
+had already lost, silently, and only the peek-marking check caught it.
+
+**`peekViewLayout` in the storage service is the supported way to size a peek.** The controller
+reads `{ratio, heightInLines}` from `IStorageService` on **every** open
+(`referencesController.js:85-86`) and writes it back on close, so seeding that key is how
+`peeklayout.ts` gives a single-definition peek its width back (preview 428px → 512px) without
+touching the private `_splitView`. CSS alone cannot do it — SplitView calls
+`preview.layout({width})` with the width it computed, so restyling the box leaves Monaco's editor
+laid out to the old one. Two limits: the list's `minimumSize: 100` survives any ratio, and the
+controller's write-back means a reader's sash drag is overwritten (which is why `heightInLines` is
+read back and preserved, and only the ratio is decided).
+
+**The rule that hides that 100px remnant is keyed on the widget's own content, and a flag there
+races.** The first version set an attribute on `<html>` from the definition provider. Monaco
+resolves on Ctrl+**hover** as well as on click, and the peek's preview is itself an editor with the
+provider registered — so a Ctrl+hover *inside* an open peek rewrote the flag and the hidden list
+reappeared under the reader. Reproduced over CDP, not theorised. The selector is now
+`.ref-tree:has(.monaco-list-rows > .monaco-list-row:only-child)`, which cannot disagree with the
+widget it describes. No `:has()` circularity, because `display: none` changes the box tree while
+selectors match the DOM tree — verified, since getting that wrong flip-flops rather than fails.
+
 **The diff tint is a constrained optimum with almost no slack, and three walls hold it there.**
 Line 13% / word 6% puts an added line at 1.20:1 against the canvas and a removed one at 1.14:1 —
 up from 1.11 and 1.07, and that ~8% is the whole available win. (1) `comment` `#8b949e` is the
@@ -493,8 +550,13 @@ selection instead.
 
 **A peek row's path is in `aria-label`, not `title`, and one candidate file means no file rows.**
 The rows are `IconLabel`s with `custom-hover="true"`, so the native title the label API implies is
-never written; `aria-label` holds exactly `uri.fsPath`, which is what `peekscope.ts`'s generated
-CSS keys on (asked of `monaco.Uri`, never assembled by hand). With a single candidate file the
+never written; `aria-label` is built from the `title` option (`iconLabel.js:88-93,124`), which
+`referencesTree.js:113` fills with `ILabelService.getUriLabel(uri)` — so it holds exactly whatever
+`urilabel.ts` answers, which is what `peekscope.ts`'s generated CSS keys on. **That is why
+`peekscope.ts`'s `rowLabel` IS `urilabel.ts`'s `modelUriLabel`, not a second implementation of
+it** — same inverse-pair hazard as `modelUri`/`parseModelUri`, and it fails the same silent way:
+a selector that matches nothing looks exactly like a peek with nothing to mark. It used to be
+`uri.fsPath`, which was correct only while nothing overrode the label service. With a single candidate file the
 tree's input is that group (`referencesWidget.js:451`) and the list is bare reference rows — there
 is nothing to mark, which is also why `docs/screenshot-peek.png` (a `shout` peek, one file) is
 unaffected by any of this. Marking is CSS rather than classes set from an observer because
