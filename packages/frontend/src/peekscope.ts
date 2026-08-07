@@ -18,8 +18,11 @@
 //  2. **A row's path is in `aria-label`, not `title`.** This Monaco renders file
 //     rows through `IconLabel` with a *custom* hover (`custom-hover="true"`), so
 //     the native title attribute the label API suggests is never written. The
-//     `aria-label` holds exactly `uri.fsPath` — the same string `monaco.Uri` can
-//     compute for us — which is what makes the CSS below keyable at all.
+//     `aria-label` holds exactly the string the label service answered for that
+//     URI (`IconLabel.setLabel`'s `title` option, iconLabel.js:88-93 and 124,
+//     filled by referencesTree.js:113) — which is what makes the CSS below
+//     keyable at all, and which is why `rowLabel` below is urilabel.ts's
+//     `modelUriLabel` rather than anything computed here.
 //  3. **One candidate file means no file rows.** With a single group the tree's
 //     input is that group (`referencesWidget.js:451`), so the list is bare
 //     reference rows and there is nothing here to mark. That is not a gap to
@@ -32,6 +35,7 @@
 // selector cannot drift: it matches whatever the row is showing right now.
 
 import type * as monaco from 'monaco-editor';
+import { modelUriLabel } from './urilabel';
 
 /** What one Ctrl+click's candidates are, split by whether the review contains them. */
 export interface PeekScope {
@@ -45,15 +49,14 @@ export interface PeekScope {
  * The text Monaco puts in a file row's `aria-label`, which is what the rules and
  * the row walk below both match on.
  *
- * `fsPath` rather than the URI string, and asked of `monaco.Uri` rather than
- * assembled here: the widget derives the row label the same way (via its label
- * service), so anything this file builds by hand would be a second definition of
- * a format we do not own — and it fails silently, because a selector that matches
- * nothing looks exactly like a peek with nothing to mark.
+ * This is urilabel.ts's `modelUriLabel` — the SAME function the label service
+ * answers with, not a local reimplementation of it. That identity is the whole
+ * correctness of this module: the widget derives the row label by calling the
+ * service, so a second definition here would be free to drift, and drifting
+ * fails silently. A selector that matches nothing looks exactly like a peek with
+ * nothing to mark — no error, no log, just a feature that quietly stopped.
  */
-function rowLabel(uri: monaco.Uri): string {
-  return uri.fsPath;
-}
+const rowLabel = modelUriLabel;
 
 const STYLE_ID = 'ccd-peek-scope';
 
