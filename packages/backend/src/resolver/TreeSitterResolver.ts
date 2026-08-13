@@ -22,6 +22,7 @@ import { Parser, Language, Query, type Node as TSNode, type QueryMatch } from 'w
 import {
   LANGUAGES,
   languageForPath,
+  grammarKeyFor,
   type DefKind,
   type DefLocation,
   type DefQuery,
@@ -40,6 +41,32 @@ interface LoadedGrammar {
  * suffix after this prefix *is* the DefKind (see tags.scm + shared/types.ts). */
 const DEFINITION_PREFIX = 'definition.';
 const DEF_KINDS: ReadonlySet<string> = new Set<DefKind>(['class', 'function', 'constant', 'type']);
+
+/**
+ * Every `definition.<kind>` capture a compiled tags query declares must have a
+ * <kind> in DEF_KINDS — `toDefMatch` silently drops anything else, and an
+ * empty `resolve()` answer is by contract indistinguishable from "no such
+ * symbol" (see the doc on `resolve()`). Upstream tags.scm conventions use
+ * kinds this resolver does not recognise (`definition.method`,
+ * `definition.interface`, ...), so a hand-authored tags file for a new
+ * language can name a capture that would vanish without a trace at the first
+ * Ctrl+click that needed it. Calling this at boot turns that into a startup
+ * failure instead, with the offending capture named.
+ */
+export function assertDefinitionKinds(query: Query, grammarKey: string): void {
+  for (const name of query.captureNames) {
+    if (!name.startsWith(DEFINITION_PREFIX)) continue;
+    const suffix = name.slice(DEFINITION_PREFIX.length);
+    if (!DEF_KINDS.has(suffix)) {
+      throw new Error(
+        `TreeSitterResolver.init: '${grammarKey}' tags query has capture '@${name}', ` +
+          `whose kind '${suffix}' is not a recognised DefKind (${[...DEF_KINDS].join(', ')}). ` +
+          `Rename the capture in the tags file to one of those, or add '${suffix}' to ` +
+          `DEF_KINDS in TreeSitterResolver.ts if it names a genuinely new definition kind.`,
+      );
+    }
+  }
+}
 
 interface DefMatch {
   name: string;
@@ -96,6 +123,7 @@ function symbolsKey(repoRoot: string, revision: string, path: string): string {
 }
 
 export class TreeSitterResolver implements SymbolResolver {
+  /** Keyed by grammar key (`grammarKeyFor`), NOT `Language.id` — see init(). */
   private readonly grammars = new Map<string, LoadedGrammar>();
 
   /**
@@ -112,27 +140,35 @@ export class TreeSitterResolver implements SymbolResolver {
 
   /**
    * `Parser.init()`, then one `Language.load` + `new Query` per registered
-   * language. Must be awaited once at boot before resolve is usable.
+   * grammar KEY (`grammarKeyFor`, not `Language.id` — several LANGUAGES entries
+   * can share an id with different grammars, e.g. `.ts`/`.tsx` both Monaco
+   * `typescript`). Must be awaited once at boot before resolve is usable.
    *
-   * Every id in LANGUAGES must have assets here, and a missing one throws at
-   * boot rather than later: without a grammar, resolve() answers `[]`, and an
-   * empty answer is indistinguishable from "no such symbol" by contract — so a
-   * misconfiguration would surface as a feature that silently does nothing.
+   * Every grammar key LANGUAGES names must have assets here, and a missing one
+   * throws at boot rather than later: without a grammar, resolve() answers
+   * `[]`, and an empty answer is indistinguishable from "no such symbol" by
+   * contract — so a misconfiguration would surface as a feature that silently
+   * does nothing.
    */
   async init(assets: Readonly<Record<string, GrammarAssets>>): Promise<void> {
     const runtimeWasm = treeSitterRuntimeWasm();
     await Parser.init(runtimeWasm ? { locateFile: () => runtimeWasm } : undefined);
 
     for (const language of LANGUAGES) {
-      const grammar = assets[language.id];
+      const key = grammarKeyFor(language);
+      // Two LANGUAGES entries can name the same grammar key on purpose (two
+      // `.ts`-like ids sharing one grammar) — load it once, not once per entry.
+      if (this.grammars.has(key)) continue;
+
+      const grammar = assets[key];
       if (!grammar) {
-        throw new Error(`TreeSitterResolver.init: no grammar assets registered for '${language.id}'`);
+        throw new Error(`TreeSitterResolver.init: no grammar assets registered for '${key}'`);
       }
 
       const lang = await Language.load(grammar.wasmPath);
       if (!lang) {
         throw new Error(
-          `TreeSitterResolver.init: ${language.id} WASM failed to load from ${grammar.wasmPath} ` +
+          `TreeSitterResolver.init: ${key} WASM failed to load from ${grammar.wasmPath} ` +
             '(likely an ABI mismatch — rebuild with tree-sitter-cli ^0.26)',
         );
       }
@@ -140,10 +176,46 @@ export class TreeSitterResolver implements SymbolResolver {
       const parser = new Parser();
       parser.setLanguage(lang);
 
-      this.grammars.set(language.id, {
-        parser,
-        query: new Query(lang, await readFile(grammar.tagsScmPath, 'utf8')),
-      });
+      const tagsSource = await readFile(grammar.tagsScmPath, 'utf8');
+      let query: Query;
+      try {
+        query = new Query(lang, tagsSource);
+      } catch (err) {
+        throw new Error(
+          `TreeSitterResolver.init: '${key}' tags query at ${grammar.tagsScmPath} ` +
+            `failed to compile: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      assertDefinitionKinds(query, key);
+
+      this.grammars.set(key, { parser, query });
+    }
+
+    // resolve() builds its non-declaring-line filter ONCE, from the clicked
+    // entry's nonDeclaringLinePrefixes, and applies it across every sibling's
+    // candidates (see the `siblings` comment in resolve()). If a .ts/.tsx pair
+    // disagreed on that list, the very same identifier would be filtered
+    // differently depending on which of the two files the click started in —
+    // silently, since the filter only narrows grep results, it never errors.
+    // Caught here instead: every group of LANGUAGES entries sharing an id must
+    // declare element-wise identical nonDeclaringLinePrefixes.
+    for (const id of new Set(LANGUAGES.map((l) => l.id))) {
+      const group = LANGUAGES.filter((l) => l.id === id);
+      const [first, ...rest] = group;
+      if (!first) continue;
+      for (const other of rest) {
+        const agree =
+          other.nonDeclaringLinePrefixes.length === first.nonDeclaringLinePrefixes.length &&
+          other.nonDeclaringLinePrefixes.every((p, i) => p === first.nonDeclaringLinePrefixes[i]);
+        if (!agree) {
+          throw new Error(
+            `TreeSitterResolver.init: LANGUAGES entries sharing id '${id}' declare different ` +
+              `nonDeclaringLinePrefixes (${JSON.stringify(first.nonDeclaringLinePrefixes)} vs ` +
+              `${JSON.stringify(other.nonDeclaringLinePrefixes)}) — resolve() applies the clicked ` +
+              'entry\'s filter across every sibling\'s candidates, so they must agree.',
+          );
+        }
+      }
     }
   }
 
@@ -157,15 +229,31 @@ export class TreeSitterResolver implements SymbolResolver {
    * language claims answers empty rather than guessing. That is unreachable
    * today, since the provider is only registered for LANGUAGES ids, but it is
    * a real branch and would otherwise read as a bug.
+   *
+   * Candidates are drawn from every LANGUAGES entry sharing that language's id
+   * (its siblings), not just the clicked entry's own extensions — see the
+   * comment on `siblings` below.
    */
   async resolve(repoRoot: string, revision: string, query: DefQuery): Promise<DefLocation[]> {
     const startedAt = performance.now();
     const language = languageForPath(query.file);
-    const grammar = language && this.grammars.get(language.id);
+    const grammar = language && this.grammars.get(grammarKeyFor(language));
     if (!language || !grammar) return [];
 
+    // Every LANGUAGES entry sharing this file's Monaco id. For a single-entry
+    // language (today, everything) this is just `[language]`, so behavior is
+    // unchanged. It exists for the split case (.ts/.tsx, both Monaco
+    // 'typescript'): a definition can live in either extension, so scoping the
+    // grep to `language.extensions` alone would make a .tsx-only declaration
+    // silently unfindable from a .ts click. `nonDeclaringLinePrefixes` still
+    // comes from the clicked entry only — init() boot-asserts every sibling
+    // group agrees on it, which is what makes that safe rather than a silent,
+    // click-origin-dependent filter.
+    const siblings = LANGUAGES.filter((l) => l.id === language.id);
+
     const candidates = await candidateFiles(
-      repoRoot, revision, query.name, language.extensions, language.nonDeclaringLinePrefixes,
+      repoRoot, revision, query.name,
+      siblings.flatMap((l) => l.extensions), language.nonDeclaringLinePrefixes,
     );
     const grepMs = performance.now() - startedAt;
     // How many of the candidates still have to be read and parsed. Counted
@@ -191,7 +279,21 @@ export class TreeSitterResolver implements SymbolResolver {
     // is synchronous WASM on the event loop. The await on each subprocess is
     // the only thing yielding it; measured max loop lag as written is 27ms.
     const perFile = await mapWithLimit(ordered, CANDIDATE_READ_CONCURRENCY, async (path) => {
-      const symbols = await this.symbolsFor(repoRoot, revision, path, grammar);
+      // A sibling's extension can name a file that is a DIFFERENT LANGUAGES
+      // entry than the one clicked (the .tsx case) — so this looks up each
+      // candidate's OWN grammar by ITS OWN path, not the clicked file's. Both
+      // lookups are expected to succeed for anything `siblings` produced, but
+      // a single candidate must never abort the whole pool: a miss just
+      // answers "no hits from this file" instead of throwing mid-pool.
+      const fileLanguage = languageForPath(path);
+      const fileGrammar = fileLanguage && this.grammars.get(grammarKeyFor(fileLanguage));
+      if (!fileLanguage || !fileGrammar) return [];
+
+      // The cache key stays (repoRoot, revision, path) — untouched by any of
+      // this. `path` already determines which grammar parses it (that's what
+      // `fileLanguage` just derived), so the key still names immutable
+      // content; it never needed the grammar as an input, only as a tool.
+      const symbols = await this.symbolsFor(repoRoot, revision, path, fileGrammar);
       return symbols.get(query.name) ?? [];
     });
 

@@ -1,5 +1,5 @@
 import './monaco-env';
-import type * as monaco from 'monaco-editor';
+import * as monaco from 'monaco-editor';
 import { registerDefinitions } from './defprovider';
 import { installTheme } from './theme';
 import {
@@ -66,6 +66,37 @@ if (!app) throw new Error('main.ts: #app element not found');
 // The predicate, not the file list: the provider asks about one path at a time
 // and must see the *current* selection, which a snapshot taken here could not.
 registerDefinitions(isInReview);
+
+// The TS language service is turned OFF wholesale, not just quieted. Its
+// "project" is every typescript/javascript model in the registry at once, and
+// this app's registry deliberately holds models from MULTIPLE revisions side
+// by side (file://<repo>/<rev>/<path>, never disposed) — so any answer it
+// gives is computed across a soup of revisions and is wrong by construction
+// here. Concretely measured: with only its diagnostics silenced, a Ctrl+click
+// on `render` in App.tsx peeked "Definitions (2)" — our resolver's answer
+// plus the service's duplicate of it — because the service registers its own
+// definition provider beside ours. Colorization is unaffected (monarch, not
+// the worker), and with every feature off the ts.worker never spawns;
+// monaco-env.ts's worker routing stays as the guard if one ever does.
+// Lives here rather than in monaco-env.ts, which deliberately does not import
+// monaco — it only defines MonacoEnvironment for the workers.
+const TS_SERVICE_OFF: monaco.typescript.ModeConfiguration = {
+  completionItems: false,
+  hovers: false,
+  documentSymbols: false,
+  definitions: false,
+  references: false,
+  documentHighlights: false,
+  rename: false,
+  diagnostics: false,
+  documentRangeFormattingEdits: false,
+  signatureHelp: false,
+  onTypeFormattingEdits: false,
+  codeActions: false,
+  inlayHints: false
+};
+monaco.typescript.typescriptDefaults.setModeConfiguration(TS_SERVICE_OFF);
+monaco.typescript.javascriptDefaults.setModeConfiguration(TS_SERVICE_OFF);
 
 // Before initShell(), which starts the first cards loading: a theme set
 // afterwards would repaint them a frame late, and the theme is global state

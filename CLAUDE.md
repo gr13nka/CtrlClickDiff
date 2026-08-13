@@ -1,6 +1,7 @@
 # CtrlClickDiff — working notes
 
-Read-only Kotlin commit reviewer. `README.md` explains what it is and how to run it; this file
+Read-only commit reviewer with Ctrl+click definitions. `README.md` explains what it is and how
+to run it; this file
 is for changing it. It records the things that cost time to rediscover — the constraints that
 look arbitrary, the bugs that have already been fixed once, and the reasons behind decisions
 that a reasonable person would otherwise undo.
@@ -14,11 +15,12 @@ no build step**, and `packages/shared` is consumed as raw `.ts` source (`"export
 ```
 packages/shared     git-types.ts (git wire shapes) repo-types.ts (registry + browse shapes)
                     types.ts (the SymbolResolver contract, documented on the interface)
-                    languages.ts (the language registry — one entry, and why)
+                    languages.ts (the language registry — 12 grammars behind 11 languages)
 packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (what a commit
                     selection means) repos.ts browse.ts watch.ts
                     resolver/TreeSitterResolver.ts (grep for candidates, parse only those)
-                    resolver/grammars.ts (grammar asset paths, keyed by language id)
+                    resolver/grammars.ts (grammar asset paths, keyed by grammar key)
+                    resolver/tags/<key>.scm (one hand-authored declarations query per grammar)
 packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
                     diff.ts (one file's editor) defprovider.ts api.ts
                     peekscope.ts (the review, as seen by peek's candidate list)
@@ -27,7 +29,7 @@ packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review c
                     modal.ts (backdrop/aria/Escape for all three dialogs)
                     storage.ts (the one guarded localStorage) resizer.ts (the sidebar seam)
                     ALL CSS is inline in index.html — except peekscope.ts's, and see below
-vendor/             prebuilt tree-sitter-kotlin.wasm (no upstream prebuild exists)
+vendor/             12 prebuilt grammar wasms + build-grammars.sh, provenance in vendor/README.md
 fixtures/           make-sample-repo.sh — generates the two test repos
 docs/               README screenshots + capture-screenshots.mjs, which regenerates them
 m1-spike/           throwaway CDN spike, kept as historical evidence. Not built or tested.
@@ -58,10 +60,16 @@ There is **no test runner** and adding one has been deliberately deferred. What 
 
 ```bash
 pnpm typecheck                      # tsc --noEmit, strict, all 3 packages
-pnpm smoke                          # asserts the Kotlin WASM loads with a matching ABI
+pnpm smoke                          # per-grammar matrix: every registered grammar loads, tags compile, sample captures
 bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
 node docs/capture-screenshots.mjs   # regenerates the README screenshots (app must be running)
 ```
+
+`pnpm smoke` (`packages/backend/src/smoke.ts`) is one matrix over every registered grammar key, not
+a single check: for each it loads the wasm, compiles its `tags.scm`, and parses a tiny sample,
+asserting the capture names it promises actually appear. A registered language with no `SAMPLES`
+row is itself a smoke failure, naming the language — a grammar nothing exercises can break, or ship
+broken, without this ever noticing.
 
 **Ctrl+click latency has a recorded baseline; beat it or explain why.** Measured against
 `~/lets-plot` (2646 `.kt`, 9.6 MB, blobless clone), backend at `REPO_ROOT=~/lets-plot`, one
@@ -81,6 +89,21 @@ End-to-end in a browser (mousePressed → `.zone-widget`) that is **51–100 ms*
 and the grep now runs every time. 30 ms is imperceptible in a gesture and it is what buys the
 bounded memory.
 
+**Boot now loads twelve grammars instead of one, and the cost is bounded.** Three runs each:
+kotlin-only boot ~670 ms → all 12 grammars ~875 ms (resolver init 61 ms → 251 ms), against a
+self-imposed budget of +1 s. RSS after boot: ~141–147 MB → ~186–194 MB. The vendor wasms add up to
+≈25 MB on disk, each read once at boot and never again.
+
+**The Kotlin numbers above still hold, and re-measuring is what proves the multi-language work
+didn't touch the resolve path.** Re-run against a fresh blobless `~/lets-plot` clone at `4e92397b`
+(the original `44db1f1a` is no longer reachable upstream; 2723 `.kt` files against the original
+2646 — the repo grew in between): `PlotSvgExport` 86 ms cold / 53 ms warm (7 candidates), `render`
+330 ms / 41 ms (52 candidates, 45 hits), `letsPlot` 298 ms / 44 ms, a non-symbol word 45 ms / 42 ms.
+That matches the recorded table within repo growth and run-to-run noise. Kotlin still has exactly
+one `LANGUAGES` row, so `siblings` resolves to `[kotlin]` and the single-entry path is unchanged by
+the sibling-scoping added for `.ts`/`.tsx` — proven bit-identical, not just similar: the same
+resolver log line, byte for byte, before and after the siblings change landed.
+
 **The per-resolve log is the first thing to look at when a click feels slow**, and it is why the
 license-header case was found at all:
 
@@ -99,6 +122,20 @@ declared in both `near/Label.kt` and `far/Label.kt` and called from `near/Caller
 that selecting only its second commit leaves the *nearer* of the two definitions outside the
 review — which is the one Monaco's peek prefers on its own. Nothing else in either repo can show
 Ctrl+click choosing between an in-review and an out-of-review candidate.
+
+Repo A's **`feature/polyglot`** is the only branch in either fixture repo that is not all-Kotlin,
+and it is the only place three things can be shown. **A mixed-language preview**: one selection,
+four cards, four different Monaco languages (`tools/report.py`, `web/render.ts`, `web/App.tsx`,
+`cmd/hello.go`). **Per-file-language scoping**: `render` is declared in both `tools/report.py` and
+`web/render.ts` on purpose, so a Ctrl+click on `render` in `tools/cli.py` (which calls the Python
+one) must resolve only the Python definition — `TreeSitterResolver.resolve` scopes candidates to
+the clicked file's Monaco language id, and Python and TypeScript are different ids. **The `.tsx` →
+`.ts` sibling case**: `render` clicked in `web/App.tsx` (grammar `tsx`) must still find
+`web/render.ts`'s definition (grammar `typescript`), because `.tsx` and `.ts` share the Monaco id
+`typescript` and `resolve()` draws candidates from every `LANGUAGES` entry sharing it (`siblings`).
+Resolver log lines from this fixture: `render` from `tools/cli.py` — 17 ms, 2 candidates → 1 hit,
+Python only; `render` from `web/App.tsx` — 13 ms, 2 candidates → 1 hit, the `.ts` sibling; `Greet`
+— 9 ms.
 
 `docs/capture-screenshots.mjs` is a worked example of everything in the two paragraphs below —
 it drives the repo picker, both palettes and a real Ctrl+click peek, and asserts on
@@ -194,6 +231,17 @@ way; the guarantee is structural, not a habit. The side-by-side/inline toggle st
 `updateOptions` (now over `liveEditors`) and must keep doing so, and `viewOptions()` is *also*
 spread into the construction bag — that is what makes a card mounted after a toggle come up in the
 new mode instead of the stored one.
+
+**Disabling Monaco's TypeScript language service means turning off every flag, not just
+diagnostics.** `main.ts` calls `setModeConfiguration` on both `typescriptDefaults` and
+`javascriptDefaults` with every field false (`completionItems`, `hovers`, `definitions`, …), not
+merely `diagnostics`. Left partially on, the service registers its own definition provider beside
+`defprovider.ts`'s — and its "project" is every `.ts`/`.js` model in Monaco's registry, which
+deliberately spans multiple revisions, so its answers cross revisions and are wrong by
+construction. Measured: a Ctrl+click on `render` in `App.tsx` peeked `Definitions (2)` before every
+flag was off — this resolver's answer plus the service's duplicate. Monarch colorization is
+unaffected (it isn't the worker), `ts.worker` never spawns with everything off, and
+`monaco-env.ts`'s worker routing stays in place as the guard if one ever does.
 
 **The four `diffEditor.*Background` colours must be translucent 8-digit hex.** Monaco registers
 them `needsTransparency`; an opaque tint paints over selection and search highlights inside a
@@ -380,6 +428,25 @@ ending in a word character (after `//` it would demand a word boundary between t
 characters and never match), and needing the leading negative lookahead is why the grep is `-P` and
 the name is escaped.
 
+**Tree-sitter's query language has no "else", and an unconstrained fallback pattern double-captures
+rather than losing to the specific one.** A specific pattern (a function-valued
+`variable_declarator` → `@definition.function`) and a general one (any `variable_declarator` →
+`@definition.constant`) both match the SAME node when the general pattern carries no negative
+constraint — `query.matches()` fires both, and the resolver does not dedupe by location, so one
+declaration answers twice. `tags/typescript.scm` and `tags/javascript.scm` avoid it by enumerating
+the *complement* of the function-ish expression types straight out of each grammar's
+`node-types.json`, instead of writing an unconstrained catch-all. Measured, not hypothetical: before
+that negative list existed, `const arrow = () => {}` produced two captures — one
+`@definition.function`, one `@definition.constant` — at the identical location.
+
+**An upstream tags.scm pattern can compile clean and capture nothing.** tree-sitter-python's own
+`tags.scm` wraps a top-level assignment in `(expression_statement (assignment ...))`, but
+`expression_statement` is declared a `supertype` in the grammar's `grammar.js` — supertype rules are
+elided from the concrete tree, so the wrapper node the pattern expects never appears and the pattern
+matches zero nodes, silently, with no compile error. `tags/python.scm` here anchors on `assignment`
+directly instead. The lesson generalises past Python: verify a pattern's captures empirically
+against the built wasm before trusting it, upstream-authored or not.
+
 **Delete every tree-sitter tree, and let nothing derived from one outlive it.** Trees are WASM
 pointers and are **not** garbage collected; the old whole-revision index leaked one per file per
 revision, which is most of its ~320 MB. `readSymbols` deletes in a `finally`, and `toDefMatch`
@@ -389,6 +456,15 @@ use-after-free that typechecks perfectly. `Query` also has `.delete()`; **do not
 query is compiled once per language and reused, a tree belongs to one parse. One shared `Parser`
 per language is safe under the read pool only because `parse()` is *synchronous*: the concurrency
 is on the I/O. Do not add a parser pool.
+
+**web-tree-sitter 0.26 renamed its runtime wasm, and that had been silently masked.** It used to
+publish as `tree-sitter.wasm` alongside `tree-sitter.js`; 0.26 renamed it to
+`web-tree-sitter.wasm`. `treeSitterRuntimeWasm()` (`resolver/grammars.ts`) looked for the old name
+on both of its resolution paths and had been silently returning `undefined` on every 0.26.x
+install — masked because `Parser.init()`'s own default `locateFile` falls back to fetching the wasm
+next to the loaded JS, which happens to still work under `tsx`. Fixed to check the current
+filename; check it again on the next upgrade, since this is exactly the kind of rename that fails
+both paths silently.
 
 **The read pool interleaves read and parse, and 8 is a measured plateau, not a preference.** On
 264 candidates: sequential 557 ms; concurrency 4/8/16/32/64 gives 267/260/267/267/274 ms. Reads
@@ -475,16 +551,41 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   `'kotlin'` literal carried by every layer and read by nothing. Deriving beats declaring: a
   declared language can disagree with the file it names, a derived one cannot. A field that can be
   derived is a field to delete.
-- **The language registry has one entry and exists to eliminate duplication, not to anticipate.**
-  `packages/shared/src/languages.ts` replaced thirteen literals across three packages that were
-  already drifting in *kind* — `'.kt'` as a suffix test, `'*.kt'` as a git pathspec, `'kotlin'` as
-  a Monaco language id, `'kotlin'` as an HTTP enum — and would have failed silently at runtime if
-  one drifted, the same hazard class as splitting `modelUri`/`parseModelUri`. `Language.id` **is**
-  Monaco's language id, deliberately: that identity is what makes `registerDefinitionProvider` and
-  `createModel` agree by construction. Do not add a `monacoId` that would always equal `id`.
-  Filesystem paths are in the backend's `resolver/grammars.ts` because `shared` is imported by the
-  browser. The revisit trigger is **a second grammar**, and that is also the test of whether the
-  seam is real.
+- **The language registry's revisit trigger fired, and the seam held.**
+  `packages/shared/src/languages.ts` held one entry (kotlin) for a long time — it had already
+  replaced thirteen literals across three packages that were drifting in *kind* (`'.kt'` as a
+  suffix test, `'*.kt'` as a git pathspec, `'kotlin'` as a Monaco language id, `'kotlin'` as an HTTP
+  enum), the same hazard class as splitting `modelUri`/`parseModelUri` — and named **a second
+  grammar** as the trigger to revisit it. It fired once, for TypeScript; the other nine languages
+  that followed it needed nothing new from the seam. Ten new languages in, nothing about the seam
+  itself moved: a language is still a row here, an assets row in the backend's
+  `resolver/grammars.ts`, a hand-authored tags file, a vendored wasm with recorded provenance, and a
+  `smoke.ts` sample. `Language.id` still **is** Monaco's language id, deliberately — that identity
+  is what makes `registerDefinitionProvider` and `createModel` agree by construction — and there is
+  still no `monacoId` that would always equal `id`. What the second grammar actually forced:
+  - **`Language.grammar?`** — one Monaco language id can now cover two tree-sitter grammars. `.ts`
+    and `.tsx` are both Monaco's `typescript`, but tree-sitter-typescript ships two separate wasms
+    because the plain grammar cannot parse JSX; `grammarKeyFor(lang)` (`lang.grammar ?? lang.id`)
+    is the only place that fallback is allowed to live.
+  - **`resolve()` greps every same-id sibling's extensions, not just the clicked entry's own.** A
+    `.tsx` click and a `.ts` click share a `siblings` list (every `LANGUAGES` row with that Monaco
+    id), so a definition in either extension is findable from the other; each candidate is then
+    parsed with its own path-derived grammar, never the clicked file's. `TreeSitterResolver.init`
+    boot-asserts that every group of same-id entries declares element-wise identical
+    `nonDeclaringLinePrefixes` — if a `.ts`/`.tsx` pair disagreed, the same identifier would be
+    filtered differently depending on which file the click started in, silently, since the filter
+    only narrows grep results and never errors.
+  - **`assertDefinitionKinds` runs at boot, not at the first unlucky Ctrl+click.** Any
+    `definition.<kind>` capture outside `{class, function, constant, type}` fails boot, naming the
+    grammar and the offending capture. Upstream tags.scm conventions use kinds this resolver
+    doesn't recognise (`definition.method`, `definition.interface`, …) — every tags file here is
+    authored against this resolver's four kinds and normalised to them, never copied verbatim from
+    upstream.
+  - **Registry row order is load-bearing in exactly one way:** `languageForPath` is first-match-wins
+    on extension suffixes. Every extension set is disjoint today, so order is only convention —
+    except `.h`, which `cpp` claims alone, deliberately: a `.c` file's Ctrl+click on a macro
+    declared in a `.h` cannot find it, an accepted limitation recorded on the `c` entry rather than
+    a bug.
 - **`/api/def` is memoized on the client, bounded, and the bound is why it is allowed to persist.**
   Monaco calls `provideDefinition` twice per Ctrl+click. An in-flight-only map was written first
   and measured: it left the count at **two**, because the two calls do not overlap — the hover
@@ -597,7 +698,7 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
 - **The review scope reaches Ctrl+click through one predicate, `shell.isInReview`.** The band uses
   it to decide a path has no card and `defprovider.ts` uses it to split the candidate list; they
   are the same question and must never answer differently. It is passed into
-  `registerKotlinDefinitions` rather than imported, so that file keeps having no ambient state of
+  `registerDefinitions` rather than imported, so that file keeps having no ambient state of
   its own — a resolution belongs to the model it started from, the review it is judged against
   belongs to the shell.
 - **Light mode is out of scope**, and `api.prewarm` was deleted rather than revived. Auto-prewarm

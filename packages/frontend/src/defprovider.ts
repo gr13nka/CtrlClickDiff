@@ -1,4 +1,4 @@
-// Milestone 3 — Kotlin definition provider. This is the feature's "heart":
+// Milestone 3 — the definition provider. This is the feature's "heart":
 // it's what turns Ctrl+click into an inline peek and F12 into a cross-file
 // jump. See peekdiff-mvp-iterative-wind.md, "Milestone 3 — Tree-sitter brain".
 //
@@ -24,7 +24,7 @@
 // model it started from.
 
 import * as monaco from 'monaco-editor';
-import { LANGUAGES, type DefLocation } from '@ctrlclickdiff/shared';
+import { LANGUAGES, languageForPath, type DefLocation } from '@ctrlclickdiff/shared';
 import { api } from './api';
 import { getOrCreateModel, modelUri, parseModelUri } from './diff';
 import { applyPeekScope } from './peekscope';
@@ -188,10 +188,14 @@ export function registerDefinitions(inReview: InReview): void {
         // inside the loop, in defs order — these models are what make cross-file
         // peek render at all.
         //
-        // Same language as the model the click started in — a definition is
-        // resolved within the language of the file it was asked from, so the
-        // target's language is known without consulting the registry again.
-        getOrCreateModel(uriStr, sources[index]!, model.getLanguageId());
+        // Derived from the TARGET path, not inherited from the clicked model's
+        // language. For any resolution today the two are the same value by
+        // construction — candidates are scoped to one language — but a
+        // declared language can disagree with the file it names, and a
+        // derived one cannot (the same argument that deleted DefQuery.lang,
+        // see packages/shared/src/types.ts). This is the rule that stays true
+        // if resolution ever crosses registry entries.
+        getOrCreateModel(uriStr, sources[index]!, languageForPath(loc.path)?.id ?? 'plaintext');
         const location = {
           uri: monaco.Uri.parse(uriStr),
           range: new monaco.Range(loc.line, loc.column, loc.line, loc.column)
@@ -218,8 +222,12 @@ export function registerDefinitions(inReview: InReview): void {
 
   // The same provider instance for every language: it reads what it needs from
   // the model it was handed, so there is nothing per-language to close over.
-  for (const language of LANGUAGES) {
-    monaco.languages.registerDefinitionProvider(language.id, provider);
+  // Deduplicated by id, not looped over LANGUAGES directly: two registry
+  // entries can share a Monaco language id (one grammar per file extension,
+  // e.g. `.ts`/`.tsx`), and registering the same provider twice for one id
+  // would make Monaco return every definition twice.
+  for (const id of new Set(LANGUAGES.map((l) => l.id))) {
+    monaco.languages.registerDefinitionProvider(id, provider);
   }
 
   // F12 / "go to definition" on a cross-file Location routes through here
