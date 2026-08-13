@@ -118,6 +118,8 @@ let statusEl: HTMLElement | null = null;
 let fileListEl: HTMLUListElement | null = null;
 let topBar: TopBar | null = null;
 let band: Band | null = null;
+let appEl: HTMLElement | null = null;
+let bandHostEl: HTMLElement | null = null;
 const rowsByPath = new Map<string, HTMLLIElement>();
 
 export function getRepoId(): string {
@@ -187,6 +189,7 @@ export function getActiveEditor(): monaco.editor.IStandaloneCodeEditor | null {
 export function initShell(rootEl: HTMLElement): void {
   rootEl.innerHTML = '';
   rootEl.classList.add('ccd-app');
+  appEl = rootEl;
 
   // Spans the full width above everything else, because what it names scopes
   // everything else: the files below belong to this repository, this ref and
@@ -227,6 +230,7 @@ export function initShell(rootEl: HTMLElement): void {
   // no editor scrolls on its own.
   const bandEl = document.createElement('div');
   bandEl.className = 'ccd-band';
+  bandHostEl = bandEl;
 
   // The three columns live in their own box below the header rather than being
   // rows of #app's grid. initResizer is handed *this* element and not rootEl
@@ -815,7 +819,9 @@ async function refreshRefs(): Promise<void> {
   // the file list showing the selected commits", which is the question that
   // decides whether it has to be rebuilt at all — and it is also true when
   // nothing moved but the user's own load was abandoned by this epoch.
-  if (!sameSelection(selection, next)) await selectCommits(next);
+  // `background`: nobody asked for this reload, so it gets the status line the
+  // way every refresh already does, but not the busy pointer — see setBusy.
+  if (!sameSelection(selection, next)) await selectCommits(next, { background: true });
 }
 
 function sameSelection(a: CommitInfo[], b: CommitInfo[]): boolean {
@@ -845,53 +851,69 @@ function placeholderCommit(sha: string): CommitInfo {
  * the backend sorts newest-first and the selection is reordered to match, so
  * what the header lists and what the diff shows cannot disagree.
  */
-async function selectCommits(next: CommitInfo[]): Promise<void> {
+async function selectCommits(
+  next: CommitInfo[],
+  opts: { background?: boolean } = {},
+): Promise<void> {
   const e = beginEpoch();
-  setStatus(next.length > 1 ? `Combining ${next.length} commits…` : 'Loading commit…');
-  let result: Preview;
+  // Only a load the reader asked for. A pointer that changes under a hand that
+  // did nothing reads as "stuck", and refreshRefs already argues the same case
+  // for the status line: it did not ask, so it does not get to take over the UI.
+  if (!opts.background) setBusy(true);
   try {
-    result = await api.preview(requireRepoId(), next.map((c) => c.sha));
-  } catch (err) {
+    setStatus(next.length > 1 ? `Combining ${next.length} commits…` : 'Loading commit…');
+    let result: Preview;
+    try {
+      result = await api.preview(requireRepoId(), next.map((c) => c.sha));
+    } catch (err) {
+      if (stale(e)) return;
+      setStatus(`Error loading commit: ${errorMessage(err)}`, 'error');
+      return;
+    }
     if (stale(e)) return;
-    setStatus(`Error loading commit: ${errorMessage(err)}`, 'error');
-    return;
+
+    // The backend's own records, not the caller's: already newest-first, and read
+    // straight off the git objects, so a commit outside the ref's listed page
+    // still arrives with its subject. Trusting `next` instead worked only for
+    // commits the caller had metadata for — true for a palette pick, false for a
+    // selection named from outside the app.
+    selection = result.commits;
+    spanRevs = { headSha: result.spanHeadSha, baseSha: result.spanBaseSha };
+    files = result.files;
+    activePath = '';
+    renderTrail();
+
+    // There is deliberately nothing to prewarm here. This used to explain why an
+    // eager POST /api/index was disabled — indexing a whole revision on every
+    // commit select cost ~11.5s on Lets-Plot and, on a blobless partial clone,
+    // thousands of on-demand blob fetches. That route is gone: the resolver now
+    // greps for the identifier and parses only the files that mention it, so the
+    // cost it was hiding from is no longer there to hide from.
+
+    renderFileList(files);
+
+    // Every changed file, deleted ones included. The old single-file view had to
+    // skip past a deletion to avoid opening on an empty pane with nothing to
+    // Ctrl+click; a band has no such problem, and a review that silently omitted a
+    // deleted file would be hiding a change.
+    band?.render(requireRepoId(), files);
+
+    // Nothing, either way. "No reviewable source files changed" used to be
+    // written here, into a muted line in the corner of the sidebar, while the
+    // column the reader was actually looking at stayed empty — so the message was
+    // both easy to miss and unable to offer a way out. band.ts renders that state
+    // now, with the same reasoning about not enumerating extensions and a button
+    // back to the commit palette. Saying it in two places would only be two
+    // places to keep in step.
+    setStatus('');
+  } finally {
+    // Clear whenever this call is the newest, even if it never set it. The two
+    // halves are deliberately asymmetric: a background refresh that supersedes a
+    // user-initiated load makes that load stale, so the load must not clear (the
+    // epoch holder owns the UI) and the refresh never set it — matching them
+    // would strand the pointer on with nothing left to turn it off.
+    if (!stale(e)) setBusy(false);
   }
-  if (stale(e)) return;
-
-  // The backend's own records, not the caller's: already newest-first, and read
-  // straight off the git objects, so a commit outside the ref's listed page
-  // still arrives with its subject. Trusting `next` instead worked only for
-  // commits the caller had metadata for — true for a palette pick, false for a
-  // selection named from outside the app.
-  selection = result.commits;
-  spanRevs = { headSha: result.spanHeadSha, baseSha: result.spanBaseSha };
-  files = result.files;
-  activePath = '';
-  renderTrail();
-
-  // There is deliberately nothing to prewarm here. This used to explain why an
-  // eager POST /api/index was disabled — indexing a whole revision on every
-  // commit select cost ~11.5s on Lets-Plot and, on a blobless partial clone,
-  // thousands of on-demand blob fetches. That route is gone: the resolver now
-  // greps for the identifier and parses only the files that mention it, so the
-  // cost it was hiding from is no longer there to hide from.
-
-  renderFileList(files);
-
-  // Every changed file, deleted ones included. The old single-file view had to
-  // skip past a deletion to avoid opening on an empty pane with nothing to
-  // Ctrl+click; a band has no such problem, and a review that silently omitted a
-  // deleted file would be hiding a change.
-  band?.render(requireRepoId(), files);
-
-  // Nothing, either way. "No reviewable source files changed" used to be
-  // written here, into a muted line in the corner of the sidebar, while the
-  // column the reader was actually looking at stayed empty — so the message was
-  // both easy to miss and unable to offer a way out. band.ts renders that state
-  // now, with the same reasoning about not enumerating extensions and a button
-  // back to the commit palette. Saying it in two places would only be two
-  // places to keep in step.
-  setStatus('');
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1162,25 @@ function setStatus(message: string, kind: StatusKind = 'info'): void {
   // passes 'error' already begins with the word, so the two agree rather than
   // the red having to be noticed.
   statusEl.classList.toggle('ccd-status-error', kind === 'error');
+}
+
+/**
+ * The pointer's half of "a preview is loading", paired with setStatus's words.
+ *
+ * The status line sits in the corner of a 300px sidebar while the reader is
+ * looking at the review column, and between picking commits and the band
+ * re-rendering the column still shows the *previous* selection — so for that
+ * whole round trip the only thing that had moved was 12px of grey text somewhere
+ * the eye was not. This says the same thing under the reader's own hand.
+ *
+ * `cursor: progress` rather than a spinner element on purpose: it renders beside
+ * the pointer wherever it already is, so it cannot cover a line of the diff, and
+ * it needs nothing appended to a band that band.ts empties on every render.
+ * `aria-busy` carries it for anyone the cursor does not reach.
+ */
+function setBusy(busy: boolean): void {
+  if (appEl) appEl.dataset.busy = busy ? 'true' : 'false';
+  if (bandHostEl) bandHostEl.ariaBusy = busy ? 'true' : 'false';
 }
 
 function errorMessage(err: unknown): string {

@@ -575,6 +575,24 @@
         scrollbar-gutter: stable;
       }
 
+      /* A preview is in flight (shell.ts's setBusy). The OS draws its own busy
+         glyph beside the pointer, so the indicator is right where the reader is
+         looking without a pixel of it landing on the code — the reason this is a
+         cursor and not a spinner element.
+
+         The descendant selector is the load-bearing half. Monaco sets
+         `cursor: text` on .view-lines and its own cursors on the margin and the
+         scrollbars, so `.ccd-app[data-busy] { cursor: progress }` alone leaves an
+         I-beam over exactly the region that fills the window. !important because
+         Monaco injects its stylesheet into <head> at runtime, i.e. after this one
+         and at matching specificity, so document order would otherwise decide it.
+         Verified by reading getComputedStyle('.view-line').cursor back, not by
+         looking at the pointer. */
+      .ccd-app[data-busy='true'],
+      .ccd-app[data-busy='true'] * {
+        cursor: progress !important;
+      }
+
       /* A review with nothing in it. Sits where the cards would be, because the
          column is where the reader is looking — this used to be one muted line
          in the corner of the sidebar beside 1290x850 of empty canvas.
