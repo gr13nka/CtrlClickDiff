@@ -204,6 +204,17 @@ caught it because an image cannot fail a typecheck. Re-run it after anything tha
 chrome. It selects `ccd-sample-repo` itself rather than trusting `REPO_ROOT`, so whatever repo
 the backend booted with cannot leak into a committed image.
 
+**Known, unfixed: on macOS that script cannot reach its third shot, because a peek poisons the next
+`render()`.** Once a peek has been opened, the following `band.render()` appends all 12 cards of
+`feature/wide` and then mounts **zero** editors — measured: 12 `.ccd-card`, 0 `.monaco-diff-editor`,
+0 `.loading`, empty status line, no console error and no failed request. Bisected over CDP:
+switching branch with no peek first mounts 9, and *revealing* a file first also mounts 9, so the
+peek is the trigger; closing it again first does not undo it, so "a widget is still open at render
+time" is **not** the mechanism — that was the first guess and it is wrong. Not caused by the
+`-E`/busy-pointer work: reproduced with those commits reverted. Whether it also happens on Linux is
+untested, and the committed screenshots suggest it does not. A reader hits this for real by peeking
+and then picking a different commit, so it is worth more than a harness annoyance.
+
 Behaviour is verified **in a real browser**. Most of what matters here — peek rendering inside
 a diff, region auto-expansion on a jump, drag-resize relayout — has no meaningful assertion
 outside one. Drive Chromium over CDP; Node 22 has a global `WebSocket`, so this needs no
@@ -223,9 +234,25 @@ returns **null** in this standalone Monaco build — the only definition-ish act
 `showDefinitionPreviewHover`. Peek comes from `definitionLinkOpensInPeek` plus a real Ctrl+click,
 so a CDP test must compute the word's viewport position
 (`editor.getScrolledVisiblePosition()` plus `getDomNode().getBoundingClientRect()`) and dispatch
-`Input.dispatchMouseEvent` with `modifiers: 2` — a `mouseMoved` first, which is what makes Monaco
-resolve and underline the link, then the press/release. Assert on a `.zone-widget` appearing.
+`Input.dispatchMouseEvent` with the trigger modifier — a `mouseMoved` first, which is what makes
+Monaco resolve and underline the link, then the press/release. Assert on a `.zone-widget` appearing.
 Testing an action id instead passes vacuously and proves nothing.
+
+**Which modifier that is depends on the platform, and Monaco decides it, not us.**
+`clickLinkGesture.js:59-70` maps the default `multiCursorModifier: 'altKey'` through `isMacintosh`,
+so the trigger is **Cmd on macOS** (CDP `modifiers: 4`) and **Ctrl everywhere else** (`modifiers: 2`).
+`docs/capture-screenshots.mjs` derives it from `process.platform`; a hardcoded `2` cannot produce a
+peek on a Mac at all. Nothing in `packages/frontend` sets `multiCursorModifier`, and it should stay
+that way — Monaco's own answer is right, and the app has no platform detection to disagree with it.
+Two ways to read the platform off a running instance rather than guessing: Monaco renders macOS
+keybinding glyphs in its context menu (`Go to Definition ⌘F12`), and on macOS Ctrl+click never
+reaches the page as a left click at all — the OS turns it into a secondary click, so it can only
+raise that menu.
+
+**A modifier-hover only underlines when a definition actually comes back**, which means a broken
+resolver is indistinguishable from a wrong modifier by eye: both are "nothing happens". Check
+`/api/def` with curl before touching anything about the gesture. That mistake has been made once
+already — a dead `git grep -P` (see below) was reported, reasonably, as "Cmd+click doesn't work".
 
 **Do not `import()` a frontend module from the CDP console to test it.** Vite serves HMR-updated
 modules under a `?t=<stamp>` URL, so a fresh `import('/src/api.ts')` can hand back a *second*
@@ -671,10 +698,30 @@ and survives; `import a.b.C as render` is an alias, not a declaration, and is co
 **`/*` is deliberately not in the list, only `*`.** A line that opens a block comment can legally
 also close it and then declare something (`/* note */ fun foo()`), so excluding it would stop being
 a filter; a line *starting* with `*` is a continuation or terminator and cannot be anything else.
-The prefixes are per language (`Language.nonDeclaringLinePrefixes`), `\b` is appended only to those
-ending in a word character (after `//` it would demand a word boundary between two non-word
-characters and never match), and needing the leading negative lookahead is why the grep is `-P` and
-the name is escaped.
+The prefixes are per language (`Language.nonDeclaringLinePrefixes`), a boundary is appended only to
+those ending in a word character (after `//` it would demand a word boundary between two non-word
+characters and never match), and the name is escaped because it reaches git as a regex.
+
+**The grep is `-E`, and it must not go back to `-P`.** PCRE is an optional git build feature and
+Apple's git — the only git on a stock macOS — does not have it: `git grep -P` answers `fatal: cannot
+use Perl-compatible regexes when not compiled with USE_LIBPCRE` and exits **128**, which
+`candidateFiles` rethrows because it only forgives exit 1. So on macOS every `/api/def` threw, no
+definitions ever came back, and Ctrl/Cmd+click was silently dead — the whole feature, on a whole
+platform, from one flag. The exclusion that used to need a lookahead is now `--and --not -e`, git
+grep's own per-line boolean, and `\b` is now `[^A-Za-z0-9_]` brackets because BSD's `regcomp` has no
+`\b` either; consuming the boundary rather than matching zero-width is invisible under `-l`.
+
+**Probing `-P` with a plain word does not test `-P`.** git short-circuits a metacharacter-free
+pattern to a fixed-string search before it ever reaches PCRE, so `git grep -P -e 'PEEK_OPTIONS'`
+succeeds on a git that cannot do `-P` at all while `git grep -P -e 'PEEK.OPTIONS'` fatals. That
+produced one confident "it works" here before the real cause was found.
+
+Equivalence was verified against lets-plot rather than argued, and re-run it if this changes again:
+the ERE form and the old PCRE pattern (applied through a Python oracle over the fixed-string
+superset) select identical file sets — `PlotSvgExport` 8, `render` 52, `letsPlot` 51 of a 2280-file
+superset, `file` 23 of 2584, `Copyright` 0 of 2576. The engine is not where the time goes: same walk
+over 2651 `.kt` files, `-F` 81ms / word only 90ms / word plus exclusion 98ms, so matching is ~17ms
+against an 81ms floor of reading the tree, and PCRE has nothing to win back.
 
 **Tree-sitter's query language has no "else", and an unconstrained fallback pattern double-captures
 rather than losing to the specific one.** A specific pattern (a function-valued
@@ -965,6 +1012,21 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   (polite, not assertive — this slot carries routine progress and would otherwise interrupt on
   every fetch). Check *recovery* when touching it: a sticky error class leaves the next "Loading…"
   painted as a failure.
+- **The busy pointer is the other half of that slot, and its set/clear pair is deliberately
+  asymmetric.** `setBusy` writes `data-busy` on `#app`, and index.html paints `cursor: progress`;
+  during a preview load the status line is 12px of grey in the corner of a 300px sidebar while the
+  review column still shows the *previous* selection, so the words alone were somewhere the eye was
+  not. A cursor rather than a spinner element because it renders beside the pointer wherever it
+  already is — it cannot cover a line of the diff, and there is nothing to append to a band that
+  `band.ts` empties on every render. Two things not to tidy. The CSS needs
+  `.ccd-app[data-busy='true'] *` **and** `!important`: Monaco sets `cursor: text` on `.view-lines`
+  from a stylesheet it injects into `<head>` at runtime, i.e. after index.html's and at matching
+  specificity, so the bare rule leaves an I-beam over the whole review — measured by reading
+  `getComputedStyle('.view-line').cursor` back, which says `progress` as written. And busy is *set*
+  only for a load the reader asked for (`refreshRefs` passes `background: true`, on its own rule
+  that an unrequested poll does not take over the UI) but *cleared* by whichever call is newest even
+  if it never set it — match the two and a background refresh that supersedes a user-initiated load
+  strands the pointer on, because the superseded call is stale and must not clear.
 - **An out-of-review peek row is greyed, not labelled, and that was measured rather than chosen.**
   A "· not in this commit" suffix was written and taken out: the peek's tree pane is ~150px, a
   filename needs ~52px and the note ~95px, so the two cannot both render. Pinning the note clipped

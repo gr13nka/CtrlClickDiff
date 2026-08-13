@@ -6,7 +6,7 @@ macOS) to open its declaration in a peek widget right inside the diff**, whether
 the same file or another one. Esc puts you back. Nothing opens in a separate tab, so you never lose
 your place in the review.
 
-![Ctrl+clicking shout in Main.kt peeks fun shout from Utils.kt, inline in the diff](docs/screenshot-peek.png)
+![Ctrl+clicking (Cmd on macOS) shout in Main.kt peeks fun shout from Utils.kt, inline in the diff](docs/screenshot-peek.png)
 
 Declarations are resolved **at the revision you are reviewing**, and resolved by name over your own
 code: no overload resolution, no following imports, no jumps into the standard library or
@@ -20,7 +20,8 @@ C# `.cs` · Ruby `.rb`
 
 Eleven languages, twelve prebuilt tree-sitter grammars shipped as WebAssembly under `vendor/` — so
 **no native toolchain is needed**, no JDK and no compiler. The list is closed and lives in one file,
-`packages/shared/src/languages.ts`. Ctrl+click never follows a reference across languages.
+`packages/shared/src/languages.ts`. Ctrl+click (Cmd on macOS) never follows a reference across
+languages.
 
 ## Requirements
 
@@ -59,7 +60,7 @@ bash fixtures/make-sample-repo.sh   # creates ~/ccd-sample-repo and ~/ccd-sample
 ./start.sh ~/ccd-sample-repo
 ```
 
-Then: newest commit → click `Main.kt` → **Ctrl+click `shout`**. It peeks `fun shout` from
+Then: newest commit → click `Main.kt` → **Ctrl+click `shout`** (**Cmd+click** on macOS). It peeks `fun shout` from
 `Utils.kt` — a different file, inside the diff. That is the screenshot above.
 
 ## Using it
@@ -151,6 +152,12 @@ filesystem. `REPO_ROOT` deliberately ignores it — that one is typed by whoever
 **Ctrl+click does nothing.** Resolution is name-based over your own code at that revision, in a
 supported language. If the symbol *is* declared in a source file in the same repo and nothing
 happens, check you are holding Ctrl (Cmd on macOS) — a plain click just moves the cursor.
+
+**On macOS, use Cmd — Ctrl+click opens a context menu.** macOS turns Ctrl+click into a secondary
+click before the page ever sees it, so it can only ever raise the menu. Cmd+click is the gesture
+there, and Cmd+hover is what underlines a symbol that has a definition. If *neither* underlines
+anything the lookup is failing rather than the key: check the backend's log for a `[resolver]` line
+on each attempt.
 
 ## What it deliberately does not do
 

@@ -17,10 +17,21 @@
 //    `~/.cache` is NOT one: it fails to create SingletonLock and aborts before
 //    the debugger binds, which looks like "Chromium never came up". Hence the
 //    mkdtemp under ~/snap/chromium/common/.
-//  - peek can only be produced by a real Ctrl+click. `revealDefinition` is not
-//    registered in this standalone Monaco build, so a test that drives an action
-//    id passes vacuously. The `mouseMoved` before the press is what makes Monaco
-//    resolve and underline the link.
+//  - peek can only be produced by a real modifier+click, and WHICH modifier is
+//    platform-dependent — see PEEK_MODIFIER. `revealDefinition` is not registered
+//    in this standalone Monaco build, so a test that drives an action id passes
+//    vacuously. The `mouseMoved` before the press is what makes Monaco resolve
+//    and underline the link — and it only underlines when a definition actually
+//    comes back, so a broken resolver looks exactly like a wrong modifier.
+//
+// KNOWN FAILURE, macOS: the wide-branch shot times out on 'the wide band'. Once
+// a peek has been opened, the NEXT band.render() lays out all 12 cards and then
+// mounts zero editors — measured: 12 cards, 0 .monaco-diff-editor, 0 .loading,
+// empty status line, no console error. Bisected: switching branch with no peek
+// first gives 9 mounted editors, and revealing a file first also gives 9, so the
+// peek is the trigger and closing it again does not undo it. It is NOT caused by
+// the platform-aware modifier below — reproduced with those commits reverted.
+// Unfixed and unexplained; the first two shots are produced normally.
 //  - the word's position is found in the DOM rather than through the editor
 //    instance, because there is no longer a single editor to ask: every changed
 //    file has its own, and `window.__ccd.modifiedEditor` answers for whichever
@@ -36,7 +47,7 @@
 // screen" no longer implies the file this script is about is one of them.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const BASE = process.argv[2] ?? 'http://localhost:5173';
@@ -49,11 +60,28 @@ const PORT = 9411;
 // at once, which is the point of the band.
 const W = 1900, H = 820;
 
+// Which modifier turns a click into a peek, in CDP's bitmask (Alt 1, Ctrl 2,
+// Meta 4, Shift 8). Monaco decides this itself and it is platform-dependent:
+// ClickLinkGesture maps the default multiCursorModifier through `isMacintosh`,
+// so the trigger is Cmd on macOS and Ctrl everywhere else. Hardcoding Ctrl made
+// this script unable to produce a peek on a Mac at all — and since the browser
+// runs on this host, `process.platform` is the same question Monaco is asking
+// `navigator.userAgent`.
+const PEEK_MODIFIER = process.platform === 'darwin' ? 4 : 2;
+const PEEK_KEY = process.platform === 'darwin' ? 'cmd' : 'ctrl';
+
 mkdirSync(OUT, { recursive: true });
 
-const profile = mkdtempSync(join(homedir(), 'snap/chromium/common/ccd-shots-'));
-const chrome = spawn('chromium', [
-  '--headless=new', '--no-sandbox', `--remote-debugging-port=${PORT}`,
+// The binary and the profile location are both platform-specific. On Linux this
+// is snap Chromium, which needs --no-sandbox and a profile dir it can actually
+// reach — ~/.cache is not one (see the header). macOS has neither constraint but
+// also has no `chromium` on PATH, so the .app has to be named outright.
+const MAC = process.platform === 'darwin';
+const profile = mkdtempSync(
+  MAC ? join(tmpdir(), 'ccd-shots-') : join(homedir(), 'snap/chromium/common/ccd-shots-'),
+);
+const chrome = spawn(MAC ? '/Applications/Chromium.app/Contents/MacOS/Chromium' : 'chromium', [
+  '--headless=new', ...(MAC ? [] : ['--no-sandbox']), `--remote-debugging-port=${PORT}`,
   `--user-data-dir=${profile}`, `--window-size=${W},${H}`,
   '--force-device-scale-factor=1', '--hide-scrollbars', '--no-first-run',
   '--disable-features=PaintHolding', 'about:blank',
@@ -222,10 +250,10 @@ const box = await evaluate(`(() => {
 })()`);
 const pos = JSON.parse(box ?? 'null');
 if (!pos) throw new Error('could not locate the word `shout` in the rendered diff');
-console.log(`  ctrl+clicking shout at ${pos.x},${pos.y}`);
+console.log(`  ${PEEK_KEY}+clicking shout at ${pos.x},${pos.y}`);
 for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
   await send('Input.dispatchMouseEvent', {
-    type, x: pos.x, y: pos.y, button: 'left', clickCount: 1, modifiers: 2,
+    type, x: pos.x, y: pos.y, button: 'left', clickCount: 1, modifiers: PEEK_MODIFIER,
   });
   await sleep(type === 'mouseMoved' ? 900 : 120);   // the move is what resolves the link
 }
