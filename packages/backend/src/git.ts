@@ -362,10 +362,23 @@ function parseNameStatus(line: string): ChangedFile | null {
   return { path, status };
 }
 
-/** Escapes a literal for embedding in a PCRE — `name` reaches git as a regex. */
+/**
+ * Escapes a literal for embedding in a POSIX ERE — `name` reaches git as a regex.
+ *
+ * Exactly the ERE metacharacters and nothing else. POSIX leaves `\` before an
+ * ordinary character *undefined*, so escaping the harmless ones is not the safe
+ * side of the trade: this used to also escape `/` and `-` (neither is special in
+ * an ERE), which GNU and BSD happen to tolerate but no standard requires.
+ */
 function escapeRegex(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/**
+ * One character that cannot be part of an identifier — the portable stand-in for
+ * `\b`, which is a GNU/PCRE extension that BSD's `regcomp` does not implement.
+ */
+const NON_WORD = '[^A-Za-z0-9_]';
 
 /**
  * Repo-relative paths of the files at `rev` that mention `name` as a whole word
@@ -375,8 +388,14 @@ function escapeRegex(literal: string): string {
  * This is candidate *discovery*, not resolution: git matches the identifier
  * anywhere on such a line, call sites included, so the caller still parses each
  * hit to find out whether it declares anything. What it buys is that the caller
- * parses seven files instead of 2646 — on lets-plot this call is ~30ms and
- * replaces a whole-revision index that cost 11.5s.
+ * parses seven files instead of 2646 — on lets-plot this call is tens of
+ * milliseconds and replaces a whole-revision index that cost 11.5s.
+ *
+ * The regex engine is not what that time is spent on, which is why choosing the
+ * portable one below costs nothing. Same walk over lets-plot's 2651 `.kt` files,
+ * best of three: `-F` on a fixed string (no regex at all) 81ms, the word pattern
+ * alone 90ms, the word pattern plus the exclusion 98ms. The floor is reading the
+ * tree; matching is ~17ms of it.
  *
  * `ignoreLinePrefixes` is what keeps that true for boilerplate identifiers. A
  * name that appears at the top of every file otherwise costs a whole-repo
@@ -389,13 +408,31 @@ function escapeRegex(literal: string): string {
  * one starting `//` or `*`. See Language.nonDeclaringLinePrefixes for the full
  * argument and the evidence.
  *
- * The flags are load-bearing and were each verified on git 2.43:
+ * The flags are load-bearing and were each verified on git 2.43 and on Apple
+ * git 2.37.1:
  *
- *  - `-P` selects PCRE, which is what makes the leading negative lookahead
- *    possible. It also means `name` is a REGEX, not a literal — hence
- *    escapeRegex, and hence `\b...\b` doing the job `-w` used to. Without
- *    escaping, `Plot.vgExport` would match `PlotSvgExport`.
- *  - `\b` bounds it to whole words, so `render` does not match `renderAll`.
+ *  - `-E` selects POSIX ERE. **Not `-P`.** PCRE is an optional build feature and
+ *    Apple's git — the only git on a stock macOS — is compiled without it, so
+ *    `-P` dies with `fatal: cannot use Perl-compatible regexes when not compiled
+ *    with USE_LIBPCRE` and exit 128. That is not a degraded search, it is every
+ *    Ctrl+click failing: the catch below only forgives exit 1, so /api/def threw,
+ *    Monaco got no definitions, and the gesture the tool is named after was
+ *    silently dead on macOS. Beware when re-testing: git short-circuits a
+ *    metacharacter-free pattern to a fixed-string search *before* reaching PCRE,
+ *    so probing `-P` with a plain word passes on a git that cannot do `-P` at all.
+ *  - `-e` also means `name` is a REGEX, not a literal — hence escapeRegex.
+ *    Without it, `Plot.vgExport` would match `PlotSvgExport`.
+ *  - Whole words come from bracketing with NON_WORD rather than `\b`, which BSD's
+ *    regcomp lacks. It consumes the boundary character instead of matching
+ *    zero-width, which is invisible here because `-l` only asks whether a file
+ *    matches at all, never where or how often.
+ *  - The boilerplate exclusion is `--and --not -e <prefixes>`, git grep's own
+ *    per-line boolean, doing the job the PCRE lookahead used to. Same semantics —
+ *    both reject the LINE rather than the match — and it needs no lookahead, so
+ *    it costs nothing in portability. Verified equal to the old pattern rather
+ *    than assumed: against lets-plot, both forms select byte-identical file sets
+ *    for `PlotSvgExport` (8), `render` (52), `letsPlot` (51 of a 2280-file
+ *    superset), `file` (23 of 2584) and `Copyright` (0 of 2576).
  *  - `-z` makes records NUL-separated. Without it git quote-escapes unusual
  *    paths per `core.quotePath` and this would need a de-quoter.
  *  - `--full-name` reports paths from the toplevel. `repoRoot` *is* the
@@ -420,23 +457,25 @@ export async function candidateFiles(
   ignoreLinePrefixes: readonly string[] = [],
 ): Promise<string[]> {
   const pathspecs = extensions.map((ext) => `*${ext}`);
-  const word = `\\b${escapeRegex(name)}\\b`;
-  // `\b` only where the prefix ends in a word character — it keeps `import` from
-  // matching `imported`, but after `//` or `*` it would demand a word boundary
-  // between two non-word characters and never match at all.
+  const word = `(^|${NON_WORD})${escapeRegex(name)}($|${NON_WORD})`;
+  // A boundary only where the prefix ends in a word character — it keeps
+  // `import` from matching `imported`, but after `//` or `*` it would demand a
+  // boundary between two non-word characters and never match at all.
   const prefixes = ignoreLinePrefixes.map(
-    (prefix) => escapeRegex(prefix) + (/\w$/.test(prefix) ? '\\b' : ''),
+    (prefix) => escapeRegex(prefix) + (/\w$/.test(prefix) ? `(${NON_WORD}|$)` : ''),
   );
   // Anchored at the line start so it rejects the LINE, not the match: a line
   // beginning with one of these is skipped however the name appears on it.
-  const pattern = prefixes.length
-    ? `^(?!\\s*(?:${prefixes.join('|')})).*${word}`
-    : word;
+  // `--and --not` is git grep's own per-line boolean, so the two patterns stay
+  // two patterns — there is no combined regex needing a lookahead to write.
+  const expr = prefixes.length
+    ? ['-e', word, '--and', '--not', '-e', `^[[:space:]]*(${prefixes.join('|')})`]
+    : ['-e', word];
 
   let stdout: string;
   try {
     stdout = await run(repoRoot, [
-      'grep', '-z', '--full-name', '-P', '-l', '-e', pattern, rev, '--', ...pathspecs,
+      'grep', '-z', '--full-name', '-E', '-l', ...expr, rev, '--', ...pathspecs,
     ]);
   } catch (err) {
     // `git grep` exits 1 for "no match", and no-match is the COMMON case here —
