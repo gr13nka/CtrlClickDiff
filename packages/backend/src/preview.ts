@@ -48,7 +48,8 @@ export async function buildPreview(repoRoot: string, shas: string[]): Promise<Pr
   // Newest-first, and every sha proven to exist, before anything else looks at
   // them — the order is what "earliest" and "latest" above are measured in, and
   // the caller's array order is not to be trusted for it.
-  const selected = await orderCommits(repoRoot, shas);
+  const ordered = await orderCommits(repoRoot, shas);
+  const selected = ordered.map((commit) => commit.sha);
   const span = await commitSpan(repoRoot, selected);
 
   // Position in the walk, newest = 0. The span is a superset of the selection,
@@ -83,6 +84,7 @@ export async function buildPreview(repoRoot: string, shas: string[]): Promise<Pr
 
   return {
     shas: selected,
+    commits: ordered,
     spanHeadSha,
     spanBaseSha,
     files: [...touches.values()].map(toPreviewFile).filter(isPresent).sort(byPath),

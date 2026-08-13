@@ -59,8 +59,15 @@
            canvas either side. Not a stylistic flourish: a diff read side by side
            is two columns of code, and past about this width a line of Kotlin has
            more empty space after it than text in it, while the eye has to travel
-           the whole monitor to get from the left pane to the right one. Wide
-           enough that neither pane wraps at a normal font size, and no wider. */
+           the whole monitor to get from the left pane to the right one.
+
+           This used to claim it was "wide enough that neither pane wraps at a
+           normal font size". That was true of the fixture repos and false of
+           real code: 1600px minus a 300px sidebar leaves 633px a pane, and this
+           project's own shell.ts has lines of 899px, so every one of them was
+           clipped. Wrapping is now on by default (diff.ts's viewOptions) and is
+           what makes the cap safe — the cap decides how far the eye travels, and
+           wrapping decides that nothing is lost when it stops. */
         --ccd-content-w-max: 1600px;
         /* Horizontal step per level of file-tree nesting. Deliberately smaller
            than the 12px gutter: at the 220px minimum sidebar width a depth-4
@@ -70,6 +77,14 @@
            fixed height: a long path wraps to a second line rather than being
            truncated past its filename. */
         --ccd-card-header-h: 32px;
+        /* The band's own inset. A token rather than a literal because
+           .ccd-card-header's sticky offset has to be its exact negative: a
+           scroll container paints scrolled content over its padding, so a header
+           pinned at the *content* edge leaves a strip of the previous lines
+           showing above it. Same reasoning as initResizer reading its clamp
+           bounds back from CSS instead of retyping them — two values that must
+           agree should not be two literals. */
+        --ccd-band-pad: 12px;
       }
 
       html, body {
@@ -102,6 +117,17 @@
            below. Inset rather than canvas, on the same rule as the sidebar and
            header: chrome recedes, code does not. */
         background: var(--ccd-canvas-inset);
+        /* Both of these INHERIT, which is why they are set once here instead of
+           on each scroll container: the band, the file tree and the palettes all
+           get the same bar. Left at the platform default, a full-width native
+           scrollbar sat down the right-hand edge of a dark UI, 15px wide and
+           unstyled — and nothing in this repo ever showed it, because every
+           screenshot is taken with Chromium's --hide-scrollbars.
+           Styled rather than hidden: the band is the app's only scroll region,
+           so this bar is the only thing on screen saying how far through a
+           review the reader is. */
+        scrollbar-width: thin;
+        scrollbar-color: var(--ccd-border) transparent;
       }
 
       /* The three-column row. --ccd-sidebar-w is written here by initResizer
@@ -324,6 +350,16 @@
         font-size: 12px;
       }
 
+      /* One slot carries progress and failure both, and at the muted grey above
+         they were the same thing to look at: a request that had died read
+         exactly like one still running. The word "Error" already leads every
+         message that gets this class, so the colour is the redundant half and
+         never the carrier — which is what keeps it working for a reader who
+         cannot separate red from grey. */
+      .ccd-status-error {
+        color: var(--ccd-danger);
+      }
+
       .ccd-file-list {
         flex: 1 1 auto;
         margin: 0;
@@ -370,14 +406,31 @@
         background: var(--ccd-canvas-subtle);
       }
 
-      .ccd-file-row.active {
-        background: var(--ccd-accent-bg);
-        color: var(--ccd-accent-fg);
+      /* Both kinds of row are role=button + tabindex=0, so both need a ring.
+         Inset, because a row is full-bleed against the sidebar edge and an
+         outset outline would be clipped on the left by the overflow above. */
+      .ccd-file-row:focus-visible,
+      .ccd-dir-row:focus-visible {
+        outline: 2px solid var(--ccd-accent-bg);
+        outline-offset: -2px;
       }
 
-      .ccd-dir-row:focus-visible {
-        outline: 1px solid var(--ccd-fg-muted);
-        outline-offset: -1px;
+      /* The file the band reports is at the top of the scroller.
+         `active` is REPORTED, not chosen — shell.ts sets it from the band's
+         IntersectionObserver, so it follows the reader's scroll rather than
+         recording a click. It was a full-bleed accent fill with white text,
+         which measured 4.08:1 against the canvas and made a passive position
+         marker the single loudest element on a screen whose entire job is
+         reading code: the diff it was pointing at is 1.20:1, so the pointer had
+         over three times the contrast of the thing pointed to.
+         Now a surface plus a 2px accent rule — 1.19:1 for the fill, with the
+         rule itself at 3.7:1 doing the work in a few pixels. Same information,
+         a twentieth of the ink, and it leaves the accent free to mean
+         "something changed here" everywhere else. */
+      .ccd-file-row.active {
+        background: var(--ccd-canvas-subtle);
+        box-shadow: inset 2px 0 0 var(--ccd-accent-bg);
+        color: var(--ccd-fg-emphasis);
       }
 
       /* One glyph that rotates, rather than two glyphs swapped by JS: the only
@@ -513,19 +566,99 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        padding: 12px;
+        padding: var(--ccd-band-pad);
+        /* Reserve the bar's width whether or not it is needed. Not inherited
+           like the two properties on #app, so it is set where it matters: a
+           short review that does not scroll would otherwise lay its cards out
+           ~11px wider than a long one, and switching between two selections
+           would reflow every wrapped line in the column. */
+        scrollbar-gutter: stable;
       }
 
+      /* A review with nothing in it. Sits where the cards would be, because the
+         column is where the reader is looking — this used to be one muted line
+         in the corner of the sidebar beside 1290x850 of empty canvas.
+         Left-aligned and narrow rather than centred in the void: the eye
+         already starts at the left edge of this column, and a centred block
+         would sit somewhere no other content ever does. */
+      .ccd-band-empty {
+        flex: 0 0 auto;
+        max-width: 52ch;
+        padding: 24px 4px;
+      }
+
+      .ccd-empty-title {
+        margin: 0 0 8px;
+        color: var(--ccd-fg-emphasis);
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .ccd-empty-body {
+        margin: 0 0 16px;
+        color: var(--ccd-fg-muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      /* How big this review is, read once before the first card. Deliberately
+         quiet — it is orientation, not content, so it sits at the muted colour
+         and lets the diff below it be the loud thing. NOT sticky: the card
+         headers own that edge, and two sticky layers would fight for it. */
+      .ccd-band-summary {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 2px 4px 6px;
+        color: var(--ccd-fg-muted);
+        font-size: 12px;
+      }
+
+      .ccd-summary-count {
+        color: var(--ccd-fg-emphasis);
+        font-weight: 600;
+      }
+
+      .ccd-summary-group {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .ccd-summary-warn {
+        color: var(--ccd-attention);
+      }
+
+      /* `+n −m` at the right end of a card header. Tabular figures so the two
+         numbers do not jitter between cards as the reader scrolls past them. */
+      .ccd-card-churn {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 6px;
+        font: 11px ui-monospace, monospace;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* The same green and red as the lines they count. The sign is written out
+         rather than left to the colour, so the pair still reads when the colour
+         does not — printed, dimmed, or by a reader who cannot separate the two. */
+      .ccd-churn-add { color: var(--ccd-success); }
+      .ccd-churn-del { color: var(--ccd-danger); }
+
+      /* NO `overflow` here, and that absence is load-bearing. Any overflow other
+         than `visible` gives an element a scrolling box, and a sticky descendant
+         sticks within its NEAREST such box — so `overflow: hidden` on the card
+         made the card its own header's scrollport, and since a card never
+         scrolls, `top: 0` resolved to the card's own top and the header rode
+         away with it. Measured before the fix: header top at scrollTop
+         400/1400/2400 was -343/-1343/-2343, i.e. never pinned once. The clip
+         that rounds the editor's square corners lives on .ccd-card-body instead,
+         which is not an ancestor of the header. */
       .ccd-card {
         border: 1px solid var(--ccd-border);
         border-radius: var(--ccd-radius-lg);
         background: var(--ccd-canvas);
-        /* Rounds the editor's square corners off. Safe because the only widgets
-           that would overflow a card are hovers and suggests, and createFileDiff
-           sets fixedOverflowWidgets so those render against <body>; peek is a
-           zone widget living inline in the content, so the card grows for it
-           rather than clipping it. */
-        overflow: hidden;
         /* Stops a flex item from being squeezed below its content height — the
            heights here are computed, and flex must not renegotiate them. */
         flex: 0 0 auto;
@@ -542,10 +675,18 @@
 
       /* Sticky, so the path stays readable while its own diff scrolls past. The
          z-index keeps it over Monaco's line content; the opaque background is
-         what makes the code slide under it rather than through it. */
+         what makes the code slide under it rather than through it.
+
+         The radius is written here rather than inherited through a clip on the
+         card, because that clip is what stopped this from sticking at all — see
+         .ccd-card. Inset by the card's 1px border so the two curves are
+         concentric instead of the header's corner cutting the border's. */
       .ccd-card-header {
         position: sticky;
-        top: 0;
+        /* The band's padding, negated — see --ccd-band-pad. Pins the header to
+           the scrollport's edge instead of its content edge, so no strip of the
+           lines above it shows through while it is stuck. */
+        top: calc(-1 * var(--ccd-band-pad));
         z-index: 2;
         display: flex;
         align-items: center;
@@ -554,10 +695,13 @@
         padding: 5px 10px;
         background: var(--ccd-canvas-subtle);
         border-bottom: 1px solid var(--ccd-border);
+        border-radius: calc(var(--ccd-radius-lg) - 1px) calc(var(--ccd-radius-lg) - 1px) 0 0;
       }
 
+      /* Collapsed, the header IS the card, so it carries all four corners. */
       .ccd-card.collapsed .ccd-card-header {
         border-bottom: none;
+        border-radius: calc(var(--ccd-radius-lg) - 1px);
       }
 
       .ccd-card-twisty {
@@ -611,9 +755,99 @@
         font-weight: 600;
       }
 
+      /* Monaco paints its ALIGNMENT SPACERS with the removed-line gutter colour,
+         so a block of purely added lines got a red bar down its left edge —
+         "added" and "deleted" claimed about the same rows at once.
+
+         A spacer is the margin view zone Monaco inserts where one side has no
+         line to put opposite the other. In the ORIGINAL editor that always
+         means the modified side gained lines, i.e. an addition — which is why
+         this is scoped there and paints them with the inserted wash rather than
+         simply clearing them. Clearing was the first fix and it was half a fix:
+         it removed the false red and left the added rows visibly shorter than
+         the removed ones, because a removed row's own `cmdr gutter-delete` does
+         cover that column. Measured on diff.ts at 1253px wide — removed spanned
+         x=1..1252 and added only x=43..1252, and that 42px step is the original
+         editor's line-number column.
+
+         A real deletion is a different element (`cmdr gutter-delete`, and in
+         inline mode `inline-deleted-margin-view-zone`), so it keeps its red.
+
+         The colour comes from theme.ts, which publishes it as a custom property
+         for exactly this rule: it has to equal `diffEditor.insertedLineBackground`
+         and there is no theme key that reaches the spacer, so the value lives in
+         one place and is read here. Reaching into Monaco's internals at all is a
+         last resort — the same call peekscope.ts makes for the peek list. */
+      .ccd-card .editor.original .margin-view-zones > .gutter-delete {
+        background: var(--ccd-diff-inserted-line, transparent);
+      }
+
       .ccd-card-body {
         /* Height is written in px by diff.ts. Nothing here may fight it. */
         min-width: 0;
+        /* Rounds the editor's square bottom corners off. This is the clip that
+           used to sit on .ccd-card; it works the same from here and, unlike
+           there, it is not an ancestor of the sticky header. Safe for the same
+           reason it was safe before: the only widgets that would overflow are
+           hovers and suggests, and createFileDiff sets fixedOverflowWidgets so
+           those render against <body>; peek is a zone widget living inline in
+           the content, so the card grows for it rather than clipping it. */
+        overflow: hidden;
+        border-radius: 0 0 calc(var(--ccd-radius-lg) - 1px) calc(var(--ccd-radius-lg) - 1px);
+      }
+
+      /* The peek's elevation, and the only thing here that knows the widget
+         exists. Everything else about how it looks is theme.ts's peekView* keys
+         — colour is a theme concern — but there is no theme key for a shadow,
+         and without one the peek had to be told apart from the code behind it
+         by a saturated blue frame (see theme.ts's peek block for the numbers).
+
+         On `.peekview-widget`, not `.zone-widget`: setCssClass puts that class
+         on the widget's *container* (zoneWidget.js:323), which is the element
+         carrying the frame borders, while `.zone-widget` is the positioned
+         outer node. Scoped through `.ccd-card` so this is the review's peek and
+         not a rule about every zone widget Monaco might ever open. */
+      .ccd-card .zone-widget .peekview-widget {
+        box-shadow: 0 8px 24px var(--ccd-shadow);
+      }
+
+      /* A peek with ONE definition has no choice to present, so its candidate
+         list is dead weight — measured at 184px of a 612px widget, holding a
+         single row that repeated the line the preview was already showing.
+         peeklayout.ts hands most of that back by seeding Monaco's stored split
+         ratio, but SplitView clamps the list to `minimumSize: 100`
+         (referencesWidget.js:346), so 100px survives whatever ratio is asked
+         for. Left alone it rendered a code line chopped mid-word against the
+         widget's edge — the "reads as broken rather than deliberate" failure
+         peekscope.ts already argues about for row labels, so this is measured
+         rather than assumed: it was seen at 100px before these rules existed.
+
+         Hiding the rows and painting the remainder to match the preview is what
+         turns the floor into margin. The colour is theme.ts's, published for
+         this rule alone — its whole job is to equal `peekViewEditor.background`,
+         the same reasoning that keeps --ccd-diff-inserted-line there.
+
+         The condition is read off the widget's OWN content — one row in the
+         list, so nothing to choose between — and that is a correctness
+         property, not a stylistic one. The first version of this set a flag on
+         <html> from the definition provider, and it raced: Monaco resolves on
+         Ctrl+hover as well as on click, the peek's preview is itself an editor
+         with the provider registered, so a Ctrl+hover INSIDE an open peek
+         rewrote the flag and the hidden list reappeared under the reader.
+         Measured, not feared — sole:true/treeVisible:false flipped to
+         sole:false/treeVisible:true with the widget still open. A selector that
+         describes the widget cannot disagree with the widget.
+
+         No `:has()` circularity here: `display: none` changes the box tree, and
+         selectors match the DOM tree, so the row this depends on keeps matching
+         after it is hidden. (Verified in the browser, because getting it wrong
+         would flip-flop rather than fail.) */
+      .ccd-card .zone-widget .ref-tree:has(.monaco-list-rows > .monaco-list-row:only-child) {
+        background: var(--ccd-peek-surface);
+      }
+
+      .ccd-card .zone-widget .ref-tree:has(.monaco-list-rows > .monaco-list-row:only-child) > * {
+        display: none;
       }
 
       /* Placeholder text for a card whose editor has not arrived yet. On the

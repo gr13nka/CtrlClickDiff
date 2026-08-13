@@ -21,9 +21,15 @@ packages/backend    Fastify. server.ts (routes) git.ts (all git) preview.ts (wha
                     resolver/TreeSitterResolver.ts (grep for candidates, parse only those)
                     resolver/grammars.ts (grammar asset paths, keyed by grammar key)
                     resolver/tags/<key>.scm (one hand-authored declarations query per grammar)
-packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review column)
+packages/frontend   Vite + Monaco. shell.ts (all UI state)
+                    band.ts (the review column — cards, plus the summary above them
+                      and the empty state that replaces them)
                     diff.ts (one file's editor) defprovider.ts api.ts
                     peekscope.ts (the review, as seen by peek's candidate list)
+                    peeklayout.ts (how much of the peek goes to the answer)
+                    urilabel.ts (how a model URI is spelled out to a human)
+                    monaco-internal.d.ts (types for the one monaco internal we import)
+                    deeplink.ts (the review as a URL — parse and serialize, an inverse pair)
                     topbar.ts (breadcrumb + view toggles) commitpalette.ts branchpalette.ts
                     filetree.ts repopicker.ts live.ts theme.ts
                     modal.ts (backdrop/aria/Escape for all three dialogs)
@@ -32,6 +38,9 @@ packages/frontend   Vite + Monaco. shell.ts (all UI state) band.ts (the review c
 vendor/             12 prebuilt grammar wasms + build-grammars.sh, provenance in vendor/README.md
 fixtures/           make-sample-repo.sh — generates the two test repos
 docs/               README screenshots + capture-screenshots.mjs, which regenerates them
+tools/              ccd-review.mjs (what an agent runs at the end of an iteration) +
+                    ccd-session-start.sh (the base it measures from) + verify-deeplink.mjs
+.claude/skills/     open-review — the wrapper that makes an agent run the opener. No logic.
 m1-spike/           throwaway CDN spike, kept as historical evidence. Not built or tested.
 start.sh            runs both halves in one terminal; the launcher the README leads with
 ```
@@ -63,6 +72,7 @@ pnpm typecheck                      # tsc --noEmit, strict, all 3 packages
 pnpm smoke                          # per-grammar matrix: every registered grammar loads, tags compile, sample captures
 bash fixtures/make-sample-repo.sh   # regenerates both fixture repos
 node docs/capture-screenshots.mjs   # regenerates the README screenshots (app must be running)
+node tools/verify-deeplink.mjs      # the deep-link contract, in a real browser (app must be running)
 ```
 
 `pnpm smoke` (`packages/backend/src/smoke.ts`) is one matrix over every registered grammar key, not
@@ -70,6 +80,31 @@ a single check: for each it loads the wasm, compiles its `tags.scm`, and parses 
 asserting the capture names it promises actually appear. A registered language with no `SAMPLES`
 row is itself a smoke failure, naming the language — a grammar nothing exercises can break, or ship
 broken, without this ever noticing.
+
+**Anything about how the diff *looks* has to be measured in a browser, and the fixture repos will
+lie to you.** Their Kotlin lines are short enough to fit any pane, so the single largest problem in
+the reading surface — every line of real code clipped at the pane edge — was invisible in all three
+committed screenshots. Audit against a real repository (this one works: register it and deep-link a
+few of its own commits) and read the numbers rather than the impression:
+
+- `.view-line` truncation is **not** `scrollWidth`, which returns a 1e6 sentinel on a Monaco line.
+  Measure where the line's last span actually ends against the scrollable viewport's right edge.
+- `.editor.original` exists in the DOM in single-pane mode too — Monaco keeps both inner editors and
+  collapses one — so its **width** is the question, never its presence.
+- Wait for a `.line-insert`/`.line-delete` decoration, not just `.monaco-diff-editor`: the editor
+  element exists before the diff is computed, and a screenshot taken in that window shows an
+  undecorated file that looks exactly like a regression. This produced a confident false failure
+  while auditing, on top of the three traps already listed below.
+- `getComputedStyle` rounds alpha to 2dp (`0.1255` → `"0.13"`), so a contrast check reading colours
+  back from the DOM is slightly pessimistic against the 8-digit hex the theme declares.
+- **Do not pass `--hide-scrollbars` to a Chromium you are auditing with.**
+  `docs/capture-screenshots.mjs` passes it so the committed images stay stable, which is right for
+  that job and wrong for every other one: it meant nothing that ever looked at this app rendered a
+  scrollbar, and an unstyled 15px native bar sat down the edge of the band unnoticed. It also makes
+  the review column 15px wider than it really is, so pane widths measured under it are optimistic.
+
+The blur and greyscale passes are the ones that catch misallocated weight, and they are worth more
+here than any single ratio: blur the screenshot and the dominant shape must be the changed lines.
 
 **Ctrl+click latency has a recorded baseline; beat it or explain why.** Measured against
 `~/lets-plot` (2646 `.kt`, 9.6 MB, blobless clone), backend at `REPO_ROOT=~/lets-plot`, one
@@ -245,11 +280,155 @@ unaffected (it isn't the worker), `ts.worker` never spawns with everything off, 
 
 **The four `diffEditor.*Background` colours must be translucent 8-digit hex.** Monaco registers
 them `needsTransparency`; an opaque tint paints over selection and search highlights inside a
-changed line. The word-diff tint is 10% rather than the 15% that reads best alone, because it
-stacks on the line tint and the darkest syntax colour otherwise falls below WCAG AA (4.34:1).
+changed line.
+
+**An unset `peekView.border` is a saturated blue frame, because it is an alias of
+`editorInfo.foreground`.** `peekView.js:232` registers it that way and the dark default is
+`#3794ff` — measured **6.17:1** against the canvas, framing added lines that sit at **1.204:1**.
+Five times the contrast of the content, spent on chrome, which is exactly the rule index.html's
+palette comment states and the same defect the sidebar's `activePath` fill already had. It is now
+`--ccd-border` at 1.55:1. **The frame could not be quieted on its own**, and that pairing is the
+part to not undo: `peekViewEditor.background` was `#0d1117`, bit-identical to `editor.background`
+(measured 1.000:1), so the blue frame was the *only* thing saying "overlay". The peek now has its
+own raised surface (`#161b22`, 1.094:1 against the editor behind it) with the list recessed to
+canvas under it, and index.html carries the shadow — there is no theme key for one. Note the frame
+colour also paints `.peekview-widget > .body`'s `border-top` and the arrow, via `_applyStyles`, so
+one key covers all three. Raising the preview costs token contrast: `comment` `#8b949e` re-measured
+at **5.62:1** there. Move that surface again and re-measure it rather than assuming.
+
+**Ten of Monaco's thirteen `peekView*` keys were unset for the whole life of the app**, so the
+widget the tool is named after rendered half Primer and half VS Code — three different near-whites
+where `--ccd-fg` was meant, `#3399ff33` on the selected row beside the app's own `#1f6feb`, and
+`#ff8f0099` match highlighting, a 60%-alpha orange painted over the definition itself. Worth
+knowing when reading that block: `peekViewResult.selectionBackground` applies **only** to a focused
+list and a row without `.highlighted` (`referencesWidget.css:46`); outside that the generic
+`list.*` colours win, so setting one without the other leaves two different selection colours.
+
+**A `getUriLabel` override is what stops the peek printing the repo id and the SHA, and where it is
+called is load-bearing.** Standalone Monaco answers `uri.fsPath` for any `file:` URI
+(`standaloneServices.js:584-589`), and ours are `file://<repoId>/<rev>/<path>`, so the peek's title
+read `//ctrlclickdiff-66caac9c/c3ebf28e…/packages/frontend/src` — 89 characters where the directory
+belonged. It ellipsizes, so at the default side-by-side width the noise pushed the *filename* off
+its own title bar (`storag…  //ctrlclickdiff-…  - Definitio…`). `urilabel.ts` replaces the service;
+`main.ts` calls it **first, before anything else touches monaco**. Not a style preference:
+`StandaloneServices.initialize` is `if (initialized) return`, and it is not the only initializer —
+`StandaloneServices.get` initializes with no overrides when it arrives first
+(`standaloneServices.js:716-719`), and `registerDefinitionProvider` (`standaloneLanguages.js:375`),
+`registerEditorOpener` and every `createModel` all go through it. Placed beside `installTheme()` it
+had already lost, silently, and only the peek-marking check caught it.
+
+**`peekViewLayout` in the storage service is the supported way to size a peek.** The controller
+reads `{ratio, heightInLines}` from `IStorageService` on **every** open
+(`referencesController.js:85-86`) and writes it back on close, so seeding that key is how
+`peeklayout.ts` gives a single-definition peek its width back (preview 428px → 512px) without
+touching the private `_splitView`. CSS alone cannot do it — SplitView calls
+`preview.layout({width})` with the width it computed, so restyling the box leaves Monaco's editor
+laid out to the old one. Two limits: the list's `minimumSize: 100` survives any ratio, and the
+controller's write-back means a reader's sash drag is overwritten (which is why `heightInLines` is
+read back and preserved, and only the ratio is decided).
+
+**The rule that hides that 100px remnant is keyed on the widget's own content, and a flag there
+races.** The first version set an attribute on `<html>` from the definition provider. Monaco
+resolves on Ctrl+**hover** as well as on click, and the peek's preview is itself an editor with the
+provider registered — so a Ctrl+hover *inside* an open peek rewrote the flag and the hidden list
+reappeared under the reader. Reproduced over CDP, not theorised. The selector is now
+`.ref-tree:has(.monaco-list-rows > .monaco-list-row:only-child)`, which cannot disagree with the
+widget it describes. No `:has()` circularity, because `display: none` changes the box tree while
+selectors match the DOM tree — verified, since getting that wrong flip-flops rather than fails.
+
+**The diff tint is a constrained optimum with almost no slack, and three walls hold it there.**
+Line 13% / word 6% puts an added line at 1.20:1 against the canvas and a removed one at 1.14:1 —
+up from 1.11 and 1.07, and that ~8% is the whole available win. (1) `comment` `#8b949e` is the
+darkest token in the theme and only 5.0:1 on bare canvas, and it must stay ≥4.5:1 read *through*
+line and word tints stacked; swept in 1/255 steps the frontier is line `0x2c` / word `0x07`, and
+past line `0x2f` **no** word tint keeps AA. (2) Raising the line tint *costs* the word diff, which
+is read against the line under it: line `0x26`/word `0x0a` buys a 1.25:1 line and collapses the
+word highlight to 1.07:1, which is not a highlight. (3) The gutter looks like free contrast and is
+not — see the next paragraph. Two dead ends worth not re-walking: more alpha fails AA, and **no**
+alpha makes added and removed distinguishable in greyscale (green and red at equal alpha land at
+the same luminance — 1.03:1 apart at 8%, still only 1.13:1 at 28%), so the `+`/`−` glyph is the
+non-colour carrier and has to stay. The one lever that would open real headroom is lightening
+`comment`, which changes how the theme reads and needs its own commit. For calibration: GitHub
+dark's own added line is also 1.20:1 — a diff tint simply *is* a low-contrast signal, so a
+"raise it to 3:1" instinct is wrong.
+
+**Monaco paints its alignment spacers with the *removed*-line gutter colour, so a block of purely
+added lines wore a red bar down its left edge** — both claims about the same rows at once, loudest
+in inline mode where the bar sits directly against the green. A spacer is the margin view zone
+Monaco inserts where one side has no line opposite the other; in the **original** editor that always
+means the modified side gained lines, i.e. an addition (measured on `band.ts`: ten of them). A real
+deletion is a *different* element (`cmdr gutter-delete`, and in inline mode
+`inline-deleted-margin-view-zone`), which is what makes the fix targetable at all — there is no
+theme key that separates them, since the spacer and the real deletion share
+`diffEditorGutter.removedLineBackground`.
+
+**The fix is to paint the spacer with the *inserted* wash, not to clear it, and clearing it was
+tried first and was half a fix.** Transparent removes the false red and leaves the added rows
+visibly *shorter* than the removed ones, because a removed row's own `cmdr gutter-delete` does cover
+that column. Measured on `diff.ts` at 1253px wide: removed spanned x=1..1252, added only
+x=43..1252, and that 42px step is the original editor's line-number column. So the rule is
+`.ccd-card .editor.original .margin-view-zones > .gutter-delete` with
+`var(--ccd-diff-inserted-line)`, and **`theme.ts` publishes that custom property** at the foot of
+`installTheme` rather than the stylesheet restating `#3fb95020` — the value's whole job is to equal
+`diffEditor.insertedLineBackground`, and a spacer a shade off the block it belongs to is worse than
+one left alone. Same reasoning that keeps `modelUri`/`parseModelUri` together. Check both edges when
+touching this: added and removed must start at the same x, and in inline mode their right edges
+still differ legitimately, because the word-diff spans end where the changed text does.
+
+**`diffEditorGutter.*` stays at 15%.** Nothing but the line number `#6e7681` sits on it and it takes
+20% before that drops under 3:1, so it looks like free contrast to spend. It was raised to 20% once
+and put straight back: the gain on a modified file is marginal next to the line wash, and every
+point of it also amplified the spacer bar above. Now that the spacers are transparent the argument
+is only the first half — still not worth it, but re-measure rather than assume if you try.
 
 **`diffEditor.unchangedRegionBackground` defaults to `sideBar.background`**, a workbench colour
 standalone Monaco never registers. Unset, the collapsed-region bars render unstyled.
+
+**`overflow: hidden` on a card is what stopped its sticky header sticking, for the whole life of
+the band.** Any overflow other than `visible` gives an element a scrolling box, and a sticky
+descendant sticks within its *nearest* such box — so `.ccd-card { overflow: hidden }` made the card
+its own header's scrollport, and a card never scrolls, so `top: 0` resolved to the card's own top
+and the header rode away with it. Measured before the fix, header top at scrollTop 400/1400/2400:
+**−343 / −1343 / −2343**, never pinned once, while both the README and the rule's own comment
+claimed it worked. The clip that rounds the editor's corners now lives on `.ccd-card-body`, which is
+not an ancestor of the header. Two related facts: the header's `top` is the band's padding
+**negated** (`--ccd-band-pad`, because a scroll container paints scrolled content over its padding,
+so pinning at the content edge leaves a 12px strip of the previous lines showing above it), and
+Chrome resolves a sticky offset against the scroll container's **content** box — measured, `top: 0`
+pinned at band-top + padding, not at band-top.
+
+**An added or deleted file must not render side by side.** There is no "before" to compare, so one
+pane holds nothing and Monaco fills it with diagonal hatch: measured on `deeplink.ts`, **1,195,936
+px² of hatch against 1,141,200 px² of visible card**, with all the content squeezed into the other
+633px pane. `viewOptions` therefore takes the file's status, and `liveEditors` is a `Map` from
+editor to status rather than a `Set` — that pairing is the point, because `applyViewOptions` would
+otherwise push a bare `renderSideBySide: sideBySide` over the override on the next toggle and put
+the empty pane back. After: hatch is 3.7% of the card. Verify both directions when touching this —
+an added file must hold 42/1224 across a full Split→Inline→Split trip, and a modified file must
+still swing 633/633 ↔ 42/1224.
+
+**Word wrap is on by default because the cap plus a sidebar leaves 633px a pane.** `--ccd-content-w-max`
+used to claim it was "wide enough that neither pane wraps"; true of the fixture repos, false of real
+code — this project's own `shell.ts` has 899px lines, so **113 of 113** rendered lines of
+`deeplink.ts` were clipped, and Monaco's horizontal scrollbar is `opacity: 0` until hovered so
+nothing said text was missing. The consequence to know: content height now depends on pane *width*,
+so dragging the sidebar re-wraps and re-fires `onDidContentSizeChange`. That is not a loop —
+measured across a full drag of the clamp and back, 20 writes, 14 distinct heights,
+4667px → 5275px → back to exactly 4667px, zero further writes after release — because the guard in
+`syncHeight` is against height→height and `scrollBeyondLastLine: false` keeps content height
+independent of viewport height.
+
+**Per-file churn comes from Monaco, not git, and will not equal `git diff --numstat`.**
+`FileDiff.churn()` reads `getLineChanges()`, which is the same list the `.line-insert` tinting is
+drawn from — so the header agrees with the coloured lines under it, which is the property that
+matters. On `shell.ts` it reports +98/−14 where *every* git algorithm (myers, minimal, patience,
+histogram, with and without the indent heuristic) says +96/−12: both are valid diffs, drawn with
+different hunk boundaries. Matching git would print a number contradicting the pixels. Two counting
+bugs that are already fixed and would come back if the clamp is removed: a text model counts the
+empty string after a trailing newline as a line and git does not (a whole-file add read "+113" for
+112 lines), and `loadModels` hands an added file `''` for its original — one empty line — so the
+same file read "−1", the absence of the file counted as a deletion. Both fall out of clamping each
+side to its own real line count, which is a true invariant rather than two special cases.
 
 **`onDidUpdateDiff` is not "the diff is ready".** It is `Event.fromObservableLight` over the diff
 model, so it fires on every transition including `result → undefined` during a `setModel`. The
@@ -309,6 +488,47 @@ same synchronous turn, so a click in that window opened a palette of 0 rows — 
 opens an empty palette is the affordance-that-lies hazard `renderTrail` already guards against
 for the selection crumb.
 
+**`updateAddressBar` writes nothing until a repository is adopted, and that guard is what stops
+the feature from destroying its own input.** It hangs off `renderTrail()`, which `initShell()` calls
+**synchronously before `void boot()`** — so an unconditional write would replace an incoming deep
+link with an empty URL in that same tick, before `boot()`'s `parseDeepLink(location.search)` line
+ever ran. `repo` stays `null` until `adoptRepo()`, which is reached only after `parseDeepLink` has
+already returned, so every call that could clobber a link is by construction one with an empty
+`repoPath`. Do not "simplify" this into an ordering rule at the call site: the no-op is also simply
+true (a review with no repository is not worth linking to), and a structural guard cannot be
+undone by someone moving a line.
+
+Two smaller facts in the same file. `replaceState`, never `pushState` — the URL mirrors state
+rather than recording a navigation, and on push the Back button would rewind the reader's own
+selection history instead of leaving the page (measured as `history.length` unchanged across two
+selections, which is what `tools/verify-deeplink.mjs` asserts rather than trusting the source).
+And the query is built by hand while it is *read* with `URLSearchParams`: reading, that class's
+`+`-means-space rule cannot bite because every producer percent-encodes; writing, it would corrupt
+a filesystem path.
+
+**Adding a deep-link parameter is five places, and the third is the one that gets forgotten.**
+`deeplink.ts` (both halves — they are in one file precisely so this is one edit), the line in
+`shell.ts` that consumes it and names *which default it overrides*, `deepLink()` in
+`tools/ccd-review.mjs` if the opener should emit it, the README's deep-link block, and a check in
+`tools/verify-deeplink.mjs` — a parameter nothing asserts is a parameter that can stop working
+silently, which is the failure mode this whole feature is prone to. **Do not validate its shape in
+`deeplink.ts`**: carry it through untouched and let the route that owns it reject it, the way `ref`
+and `shas` already do. A second copy of a validation rule is the drift hazard, and the error path
+already exists.
+
+Where the opener is extended is `open()` in `ccd-review.mjs` — one function, currently Orca then
+`xdg-open`, and the only place that knows how a review reaches a human. Adding an editor or a
+different browser goes there and nowhere else; note that failing to open is deliberately a warning
+rather than an error, because the URL on stdout is the part a caller can act on.
+
+**A deep link's repository never falls back to recents or `defaultRepoId`.** `boot()` branches once
+(`link ? api.registerRepo(link.repoPath) : preferredRepo(await api.repos())`) and reports the
+backend's own refusal text on failure. Falling through would open a *different* repository than the
+one the reader followed a link to, with nothing on screen saying so — the same class of wrong-answer
+-dressed-as-right as the pre-`--diff-merges` merge commit. The regression is invisible to any test
+that checks only "did something load", which is why `verify-deeplink.mjs` asserts the repo crumb
+still reads `Choose repository…` after a refused link.
+
 **`modelUri` and `parseModelUri` are an inverse pair and live together in `diff.ts`.** Splitting
 them (the parse used to sit in `defprovider.ts`) makes the segment layout a two-file edit whose
 half-done version fails **silently at runtime** — cross-file peek just stops rendering — and
@@ -330,8 +550,13 @@ selection instead.
 
 **A peek row's path is in `aria-label`, not `title`, and one candidate file means no file rows.**
 The rows are `IconLabel`s with `custom-hover="true"`, so the native title the label API implies is
-never written; `aria-label` holds exactly `uri.fsPath`, which is what `peekscope.ts`'s generated
-CSS keys on (asked of `monaco.Uri`, never assembled by hand). With a single candidate file the
+never written; `aria-label` is built from the `title` option (`iconLabel.js:88-93,124`), which
+`referencesTree.js:113` fills with `ILabelService.getUriLabel(uri)` — so it holds exactly whatever
+`urilabel.ts` answers, which is what `peekscope.ts`'s generated CSS keys on. **That is why
+`peekscope.ts`'s `rowLabel` IS `urilabel.ts`'s `modelUriLabel`, not a second implementation of
+it** — same inverse-pair hazard as `modelUri`/`parseModelUri`, and it fails the same silent way:
+a selector that matches nothing looks exactly like a peek with nothing to mark. It used to be
+`uri.fsPath`, which was correct only while nothing overrode the label service. With a single candidate file the
 tree's input is that group (`referencesWidget.js:451`) and the list is bare reference rows — there
 is nothing to mark, which is also why `docs/screenshot-peek.png` (a `shout` peek, one file) is
 unaffected by any of this. Marking is CSS rather than classes set from an observer because
@@ -688,6 +913,35 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
 - **Tree collapse state is in memory only.** A stale persisted collapse can hide a changed file
   from a review, which is a correctness hazard. Sidebar width *is* persisted; that is a
   preference, not a view of the data.
+- **What the sidebar reports must never outshout what the diff shows.** `activePath` is *reported*
+  by the band's IntersectionObserver, not chosen by a click, and it used to render as a full-bleed
+  accent fill — 4.08:1 against the canvas, against a diff at 1.20:1, so a passive scroll-position
+  marker carried 3.5× the contrast of the thing it pointed at and was the strongest shape on a
+  blurred screenshot. Now a subtle surface plus a 2px inset accent rule: ratio 1.0×, and the accent
+  is free to mean "something changed here". The blur test is what decides this, not an opinion —
+  squint at it, and the dominant shape must be the changed lines.
+- **Every row of the sidebar is a control, both kinds.** `dirItem` had `role=button` + `tabIndex 0`
+  from the start and `fileRow` did not, so the tab order could expand a directory and then reach
+  nothing inside it — the destinations of the app's primary navigation were mouse-only. Making a row
+  a control also makes its accessible name audible, which is why the one-letter badge is
+  `aria-hidden` and the row is labelled "`<path>`, added": the letter is a glyph, and a glyph is a
+  poor thing to hear. The badge stays one letter, because that is the entire reason it is one.
+  Deliberately *not* a full `role=tree` with roving tabindex — matching the sibling pattern is what
+  removes the blocker; tree semantics are their own change.
+- **The empty state lives in the band and carries an action.** "No reviewable source files changed"
+  used to be one muted 12px line in the corner of the sidebar beside 1290×850 of empty canvas —
+  easy to miss, and it named a fault without a remedy, so it read as a broken tool. It is now a
+  block where the reader is looking, with why it happened and a button into the commit palette
+  (`BandHooks.onChooseCommits`, a hook because the palette needs state only the shell has). The
+  languages are still named as a *category*: `641f86e` removed the extension list because a sentence
+  spelling out a dozen suffixes stops being a sentence, and moving the sentence did not change that.
+- **`setStatus` carries a severity, and the colour is the redundant half.** One slot holds
+  "Loading commits…" and "Error loading diff: …", and at one colour a dead request looked exactly
+  like a slow one. Errors render in `--ccd-danger`; every message that passes `'error'` already
+  begins with the word, so the red confirms rather than carries. The element is `role=status`
+  (polite, not assertive — this slot carries routine progress and would otherwise interrupt on
+  every fetch). Check *recovery* when touching it: a sticky error class leaves the next "Loading…"
+  painted as a failure.
 - **An out-of-review peek row is greyed, not labelled, and that was measured rather than chosen.**
   A "· not in this commit" suffix was written and taken out: the peek's tree pane is ~150px, a
   filename needs ~52px and the note ~95px, so the two cannot both render. Pinning the note clipped
@@ -701,6 +955,26 @@ survivors. It is `log` and not `rev-list` purely to keep the permitted-subcomman
   `registerDefinitions` rather than imported, so that file keeps having no ambient state of
   its own — a resolution belongs to the model it started from, the review it is judged against
   belongs to the shell.
+- **`selection` comes from `/api/preview`'s own records, not from `selectCommits`'s caller.** The
+  caller-supplied version worked exactly when the caller already had metadata — true for a palette
+  pick, false for a selection named from outside the app, where a fresh page load has nothing to look
+  anything up in. `orderCommits` had to run `git log --no-walk` over the selection anyway (that call
+  is what sorts it and proves each sha exists), so asking it for the record format instead of `%H`
+  adds no process and no round trip, and answers for any commit in the object database — including
+  one older than the ref's 100-commit page or no longer on the ref at all. This is why
+  `loadCommits(initialShas)` may hand `selectCommits` bare SHAs wearing empty metadata: those
+  placeholders cannot reach the screen.
+- **The end-of-iteration opener is a CLI, and the skill is a wrapper with no logic in it.**
+  `tools/ccd-review.mjs` is what an agent runs when it finishes; `.claude/skills/open-review/`
+  only says to run it and how to read its exit codes. An MCP server was considered and declined —
+  every agent can already run a shell command, so it would buy a second process, a config entry per
+  agent and another thing to be down, for nothing. Exit **2** (no commits) is not a failure and must
+  stay distinct from **1**: both sides of a preview are revisions that already exist, so an
+  uncommitted tree is genuinely not reviewable here, and an agent needs to say that rather than
+  invent a range. One coupling to know about: `ccd-session-start.sh` (a `sh` hook) and
+  `ccd-review.mjs` (Node) must agree on `XDG_CACHE_HOME` **and** on the 16-hex-digit sha256 of the
+  worktree path, or the writer files the session base where the reader never looks and the base
+  silently degrades to `merge-base` — verified by running both, not by reading them.
 - **Light mode is out of scope**, and `api.prewarm` was deleted rather than revived. Auto-prewarm
   on commit select stays disabled — see the comment in `selectCommit`; on a large repo behind a
   blobless partial clone it triggers thousands of on-demand blob fetches.

@@ -24,6 +24,7 @@ inline, without leaving the diff. Esc closes it and puts you back.*
 - [Run it](#run-it)
 - [Try it in two minutes](#try-it-in-two-minutes)
 - [How to use it](#how-to-use-it)
+- [Review from an agent](#review-from-an-agent)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
 - [What it deliberately does not do](#what-it-deliberately-does-not-do)
@@ -52,9 +53,10 @@ CtrlClickDiff gives you both at once: a real diff, with language-aware navigatio
 
 ![Every changed file stacked in one scroll, unchanged regions collapsed](docs/screenshot-wide.png)
 
-A wide change on a feature branch. **Every changed file is stacked in one continuous scroll**, next
-file directly below the last, each under a sticky header naming it — so reviewing twelve files is
-one gesture, not twelve. The sidebar collapses the deep Kotlin package
+A wide change on a feature branch. It opens by saying how big it is — **12 files**, broken down by
+added/modified/deleted — and then **every changed file is stacked in one continuous scroll**, next
+file directly below the last, each under a sticky header naming it and its `+n −m`, so reviewing
+twelve files is one gesture, not twelve. The sidebar collapses the deep Kotlin package
 `src/main/kotlin/org/example/wide` into a **single row** instead of five nested ones, and unchanged
 regions fold away — so a 2-line edit inside a 120-line file is all that's on screen, under a
 `60 hidden lines` bar you can click to expand. The header is a breadcrumb of what you're reviewing:
@@ -102,14 +104,22 @@ you can review several commits as one diff.
 
 - **One continuous scroll** over every changed file, not one file at a time. The sidebar tree
   scrolls you to a file and highlights whichever one you've scrolled to; each file's header has a
-  chevron to fold that file away.
-- **Side-by-side or inline**, toggled live.
+  chevron to fold that file away, and shows how many lines that file adds and removes.
+- **A count before the code** — how many files the selection touches, and how many are added,
+  modified or deleted.
+- **Side-by-side or inline**, toggled live. An added or deleted file always renders as one pane,
+  because there is no "before" to compare it against.
+- **Long lines wrap** rather than running off the edge, with a toggle. Two panes inside a capped
+  column are narrower than real code, and a clipped line is worse than a wrapped one when the
+  scrollbar that would reveal it only appears on hover.
 - **Unchanged regions collapsed** by default (at `git diff -U3` context), with a toggle to show
   everything.
 - Word-level change highlighting and a GitHub Primer dark theme, with contrast checked to WCAG AA
   over the diff tints.
-- **Drag-resizable sidebar** — double-click the seam to reset. Sidebar width and both view toggles
-  persist across reloads.
+- **Keyboard-reachable** — every row of the changed-file tree is a real control, so the whole
+  review can be navigated with Tab and Enter.
+- **Drag-resizable sidebar** — double-click the seam to reset. Sidebar width and all three view
+  toggles persist across reloads.
 
 ### Live updates
 
@@ -327,6 +337,79 @@ two-revision representation, so the skipped commit's edits are unavoidably insid
 Those files get a **⚠** — on the sidebar row and on the file's own header — whose tooltip names the
 commits responsible, by subject.
 
+## Review from an agent
+
+A coding agent that just finished an iteration can open the review of *its own commits* in
+front of you:
+
+```bash
+node tools/ccd-review.mjs
+```
+
+It works out what the iteration committed, registers the worktree with the backend, prints the
+review URL and opens it — as a tab inside [Orca](https://github.com/stablyai/orca)'s embedded
+browser when you're running under Orca, so the review lands beside the worktree it belongs to,
+and in your desktop browser otherwise. Under Claude Code, `.claude/skills/open-review/` is the
+skill that tells the agent to run it.
+
+Its exit code is the interface, because the caller is a program: **0** the review is open,
+**2** the iteration left no commits (CtrlClickDiff reviews commits — an uncommitted working
+tree isn't something it can show), **1** a real failure, with the reason on stderr.
+
+Flags: `--base=<rev>` to review since a specific revision, `--shas=a,b` for exactly those
+commits, `--no-open` to just print the URL, `--json` for the whole answer.
+
+**Sharpening "this iteration".** Without help, the tool reviews everything since your branch
+left the default branch — right for a fresh worktree, wider than one iteration on a long-lived
+branch. Installing `tools/ccd-session-start.sh` as a `SessionStart` hook records where HEAD was
+when the session began, and the tool then reviews exactly what the session added. In
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "/path/to/CtrlClickDiff/tools/ccd-session-start.sh" }] }
+    ]
+  }
+}
+```
+
+**Opening it without the agent's help.** A `Stop` hook runs the opener at the end of every turn,
+so the review appears whether or not the agent remembers to ask for it:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node /path/to/CtrlClickDiff/tools/ccd-review.mjs" }] }
+    ]
+  }
+}
+```
+
+Both hooks are safe to install together — the session hook only records a SHA, and the opener
+exits quietly (code 2) on a turn that committed nothing.
+
+> Worktrees have to sit inside `CCD_BROWSE_ROOT` (default `$HOME`) — Orca's own live under
+> `~/orca/workspaces`, so that works out of the box. A worktree elsewhere needs
+> `CCD_BROWSE_ROOT` set to cover it; the tool relays the backend's refusal verbatim when it
+> doesn't.
+
+### Deep links
+
+That URL is just a link, and you can build or share one yourself. Every review has one, and the
+address bar always holds the current one — copy it, and whoever opens it sees the same review:
+
+```
+http://localhost:5173/?path=<absolute repo path>&ref=refs/heads/<branch>&shas=<sha>,<sha>
+```
+
+Only `path` is required; `ref` and `shas` fall back to the branch HEAD is on and its newest
+commit. The repository is named by **path**, not by id: the backend's registry lives in memory,
+so ids don't survive a restart while a path always re-registers to the same one. A link whose
+repository the backend refuses reports why and stops — it never quietly opens a different one.
+
 ## Configuration
 
 All optional, all environment variables:
@@ -376,6 +459,29 @@ that *was* the tip — a hand-built multi-commit selection is deliberately left 
 **`pnpm smoke` fails.**
 A grammar's WASM didn't load — the failure names which one. Confirm the file exists under
 `vendor/` and that `node --version` is `v22.x`; see `vendor/README.md` to rebuild it.
+
+**`ccd-review.mjs` exits 2 and opens nothing.**
+The iteration left no commits. That's the honest answer, not a bug: both sides of a diff have to
+be revisions that already exist, so an uncommitted working tree is nothing this can show. Commit,
+then run it again. Don't reach for `--base` to manufacture a range — it will show you commits the
+iteration didn't make.
+
+**It reviews far more commits than the iteration made.**
+No session base was recorded, so it fell back to "everything since this branch left the default
+branch". Install `tools/ccd-session-start.sh` as a `SessionStart` hook (above), or pass
+`--base=<rev>`. If the hook *is* installed and the base still looks wrong, check that the hook and
+the tool agree on `XDG_CACHE_HOME` — they key the recorded SHA by it.
+
+**The link opens, but the header says "Choose repository…".**
+The backend refused the path and the status line says why — usually outside `CCD_BROWSE_ROOT`, or
+a path that no longer exists. It deliberately does not fall back to another repository: opening
+something other than what the link named would be a wrong answer with nothing on screen admitting
+it. Fix the path or widen `CCD_BROWSE_ROOT`, then reload.
+
+**The URL is printed but no tab appears.**
+Opening is best-effort: the link on stdout is the part that matters. Under Orca, check `orca status`
+— the opener uses `orca tab create` and falls back to `xdg-open`, which needs a desktop session.
+Paste the URL into a browser meanwhile.
 
 ## What it deliberately does not do
 
@@ -476,6 +582,9 @@ packages/frontend   Vite + Monaco; shell.ts, diff.ts, defprovider.ts, and one mo
 vendor/             12 prebuilt grammar wasms + build-grammars.sh (how to rebuild them)
 fixtures/           make-sample-repo.sh — the reproducible test repos
 docs/               the screenshots used in this file
+tools/              ccd-review.mjs (open a review of an iteration's commits) and its hook,
+                    plus verify-deeplink.mjs
+.claude/skills/     open-review — what tells a Claude Code agent to run the opener
 m1-spike/           a throwaway CDN spike that proved peek-in-diff before any real code
 ```
 
@@ -483,6 +592,7 @@ m1-spike/           a throwaway CDN spike that proved peek-in-diff before any re
 pnpm typecheck                      # tsc --noEmit, strict, all three packages
 pnpm smoke                          # asserts every registered grammar loads with a matching ABI
 bash fixtures/make-sample-repo.sh   # regenerate the fixture repos
+node tools/verify-deeplink.mjs      # the deep-link contract, in a real browser (app must be running)
 ```
 
 There is **no test runner** — behaviour is verified in a real browser, because most of what matters

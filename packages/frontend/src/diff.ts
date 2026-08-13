@@ -28,12 +28,17 @@ const PEEK_OPTIONS: monaco.editor.IEditorOptions = {
   }
 };
 
-// Every editor currently on screen. The band creates and disposes these as
-// cards scroll in and out of reach, so a view preference has to reach all of
-// them at once — and a card that was away while a toggle flipped has to come
-// back in the new mode, which is why viewOptions() is also spread into the
-// construction bag below.
-const liveEditors = new Set<monaco.editor.IStandaloneDiffEditor>();
+// Every editor currently on screen, against the status of the file it shows.
+// The band creates and disposes these as cards scroll in and out of reach, so a
+// view preference has to reach all of them at once — and a card that was away
+// while a toggle flipped has to come back in the new mode, which is why
+// viewOptions() is also spread into the construction bag below.
+//
+// A Map rather than a Set because viewOptions() is a function of the file's
+// status as well as the preferences: an added or deleted file is always one
+// pane. Without the status here, the next toggle would push a bare
+// `renderSideBySide: sideBySide` over that and put the empty pane back.
+const liveEditors = new Map<monaco.editor.IStandaloneDiffEditor, FileStatus>();
 
 // ---------------------------------------------------------------------------
 // View preferences
@@ -54,6 +59,17 @@ const DIFF_MODE_KEY = 'ccd.diffMode';
 // reads as side-by-side, which is the default.
 let sideBySide = readStored(DIFF_MODE_KEY) !== 'inline';
 
+const WRAP_KEY = 'ccd.wordWrap';
+
+// Whether a line too long for its pane wraps instead of running off the edge.
+// On unless explicitly turned off, and that default is the fix for a measured
+// failure rather than a taste: side-by-side halves an already-capped column, so
+// on this repo's own shell.ts at 1900px each pane is 633px against a widest line
+// of 899px — 113 of 113 rendered lines clipped. Monaco's horizontal scrollbar is
+// opacity 0 until hovered, so nothing on screen even said text was missing; the
+// reader silently lost the end of every comment.
+let wordWrap = readStored(WRAP_KEY) !== 'off';
+
 const COLLAPSE_KEY = 'ccd.collapseUnchanged';
 
 // Whether long unchanged stretches are folded away behind a clickable bar.
@@ -61,10 +77,27 @@ const COLLAPSE_KEY = 'ccd.collapseUnchanged';
 // a 120-line file with a two-line edit is 118 lines of scrolling past nothing.
 let collapseUnchanged = readStored(COLLAPSE_KEY) !== 'off';
 
-/** The editor options the current preferences add up to. */
-function viewOptions(): monaco.editor.IDiffEditorOptions {
+/**
+ * The editor options the current preferences add up to, for a file of `status`.
+ *
+ * Side-by-side is a preference for a *modified* file and a mistake for the other
+ * two. An added file has no "before" and a deleted one has no "after", so one of
+ * the two panes holds nothing and Monaco fills it with diagonal hatch — measured
+ * on this repo's own `deeplink.ts`, 1,195,936 px² of hatch against 1,141,200 px²
+ * of visible card, i.e. the majority of the card spent saying "there is nothing
+ * here" while the half holding all the content was squeezed to 633px and clipped
+ * every one of its 113 lines. There is nothing to compare; do not draw a
+ * comparison.
+ */
+function viewOptions(status: FileStatus): monaco.editor.IDiffEditorOptions {
   return {
-    renderSideBySide: sideBySide,
+    renderSideBySide: sideBySide && status === 'M',
+    wordWrap: wordWrap ? 'on' : 'off',
+    // 'indent' rather than Monaco's default 'same': a continuation that starts
+    // further in than the line it continues cannot be mistaken for a statement
+    // of its own, which matters more here than anywhere, because the reader is
+    // scanning for what changed rather than following control flow.
+    wrappingIndent: 'indent',
     hideUnchangedRegions: {
       enabled: collapseUnchanged,
       // Three lines each side of a change, which is `git diff -U3` and what
@@ -85,7 +118,7 @@ function viewOptions(): monaco.editor.IDiffEditorOptions {
 
 /** No-op while nothing is mounted: the construction option bag carries the same values. */
 function applyViewOptions(): void {
-  for (const editor of liveEditors) editor.updateOptions(viewOptions());
+  for (const [editor, status] of liveEditors) editor.updateOptions(viewOptions(status));
 }
 
 /** Whether the diff is rendering side-by-side. For the sidebar's toggle. */
@@ -104,6 +137,26 @@ export function isSideBySide(): boolean {
 export function setRenderSideBySide(next: boolean): void {
   sideBySide = next;
   writeStored(DIFF_MODE_KEY, next ? 'side-by-side' : 'inline');
+  applyViewOptions();
+}
+
+/** Whether long lines wrap. For the topbar's toggle. */
+export function isWordWrap(): boolean {
+  return wordWrap;
+}
+
+/**
+ * Wraps long lines, or lets them run off the edge again, and remembers which.
+ *
+ * The escape hatch exists because wrapping is not free everywhere: a wide table,
+ * generated code or ASCII art is held together by its columns, and reflowing it
+ * destroys the structure the reader was using. Off, the horizontal scrollbar is
+ * the only way to see the rest of a line — which is the state this app shipped
+ * in, so nothing is lost by making it reachable.
+ */
+export function setWordWrap(next: boolean): void {
+  wordWrap = next;
+  writeStored(WRAP_KEY, next ? 'on' : 'off');
   applyViewOptions();
 }
 
@@ -168,6 +221,27 @@ export interface FileDiff {
   readonly modified: monaco.editor.IStandaloneCodeEditor;
   /** Resolves once the diff for this pair has actually been computed. */
   whenDiffComputed(): Promise<void>;
+  /**
+   * How many lines this diff adds and removes, or null before it is computed.
+   *
+   * Read off Monaco's own line changes rather than counted anywhere else,
+   * because this is the diff the reader is looking at — `getLineChanges()` is
+   * the same list the `.line-insert` / `.line-delete` tinting is drawn from, so
+   * the number in the header and the coloured lines under it cannot disagree.
+   *
+   * That is worth being deliberate about, because it does NOT always equal
+   * `git diff --numstat`. Monaco's diff algorithm is its own: on this project's
+   * shell.ts over one selection it reports +98/-14 where every git algorithm —
+   * myers, minimal, patience, histogram, with and without the indent heuristic
+   * — says +96/-12. Both are valid diffs of the same content; they just draw
+   * hunk boundaries differently. Matching git would mean printing a number that
+   * contradicts the lines on screen, which is the worse of the two.
+   *
+   * Asking git would also answer a different question in a second way: over a
+   * multi-commit selection, a line touched twice is counted twice by summing
+   * `--numstat` across commits and once by diffing the endpoints.
+   */
+  churn(): { added: number; removed: number } | null;
   /** Current content height in px — what the host element is sized to. */
   height(): number;
   /** Drops the editor. Leaves the models: see loadModels. */
@@ -199,14 +273,14 @@ export async function createFileDiff(
     // Spread rather than restated, so the persisted preferences — and any
     // toggle flipped while this card was unmounted — are already in force on
     // the first paint instead of flipping a frame after it.
-    ...viewOptions()
+    ...viewOptions(spec.status)
   });
 
   editor.getOriginalEditor().updateOptions(PEEK_OPTIONS);
   editor.getModifiedEditor().updateOptions(PEEK_OPTIONS);
 
   editor.setModel({ original, modified });
-  liveEditors.add(editor);
+  liveEditors.set(editor, spec.status);
 
   // Auto-height. IDiffEditor has no onDidContentSizeChange of its own — it
   // extends IEditor, not ICodeEditor (monaco.d.ts:6410) — so the signal has to
@@ -248,6 +322,7 @@ export async function createFileDiff(
   return {
     modified: editor.getModifiedEditor(),
     whenDiffComputed: () => whenDiffComputed(editor),
+    churn: () => churnOf(editor),
     height: () => applied,
     dispose: () => {
       for (const sub of subs) sub.dispose();
@@ -314,6 +389,12 @@ export async function createFileView(
   return {
     modified: editor,
     whenDiffComputed: () => Promise.resolve(),
+    // A reference card is one revision of a file the selection never touched,
+    // so there is no churn to report — not "0 added, 0 removed", which would be
+    // a claim about a diff that was never taken. null is the same answer this
+    // gives before a real diff has computed, and the caller already draws
+    // nothing for it.
+    churn: () => null,
     height: () => applied,
     dispose: () => {
       sub.dispose();
@@ -461,4 +542,58 @@ function whenDiffComputed(editor: monaco.editor.IStandaloneDiffEditor): Promise<
       resolve();
     });
   });
+}
+
+/**
+ * Added and removed line counts, off the same `getLineChanges()` that decides
+ * readiness above — null until it is.
+ *
+ * An `ILineChange` uses an END line of 0 to mean "this side contributes
+ * nothing", which is how a pure insertion and a pure deletion are spelled. That
+ * is why each side is guarded rather than subtracted unconditionally: on a
+ * pure insertion the original range is 0..0, and `end - start + 1` would count
+ * it as one removed line that does not exist.
+ */
+function churnOf(
+  editor: monaco.editor.IStandaloneDiffEditor
+): { added: number; removed: number } | null {
+  const changes = editor.getLineChanges();
+  if (changes === null) return null;
+
+  let added = 0;
+  let removed = 0;
+  for (const c of changes) {
+    if (c.originalEndLineNumber > 0) {
+      removed += c.originalEndLineNumber - c.originalStartLineNumber + 1;
+    }
+    if (c.modifiedEndLineNumber > 0) {
+      added += c.modifiedEndLineNumber - c.modifiedStartLineNumber + 1;
+    }
+  }
+
+  // Neither side can change more lines than it has, and that clamp is doing two
+  // jobs a pair of special cases would have done worse.
+  //
+  // A text model counts the empty string after a file's trailing newline as a
+  // line and git does not, so a whole-file add reported "+113" for the 112-line
+  // file `git diff --numstat` counts. And loadModels hands an added file '' for
+  // its original, which is one empty line, so the same file also reported "-1"
+  // — the absence of the file, counted as a deletion.
+  //
+  // Clamping to each side's real line count fixes both, and keeps working for
+  // the cases neither special case would have covered: a file emptied but not
+  // deleted (status still 'M', git says "+0 -N"), or one whose trailing newline
+  // is itself what changed.
+  const models = editor.getModel();
+  if (models) {
+    added = Math.min(added, contentLines(models.modified));
+    removed = Math.min(removed, contentLines(models.original));
+  }
+  return { added, removed };
+}
+
+/** Lines as git counts them: the empty one after a trailing newline is not a line. */
+function contentLines(model: monaco.editor.ITextModel): number {
+  const n = model.getLineCount();
+  return n > 0 && model.getLineLength(n) === 0 ? n - 1 : n;
 }

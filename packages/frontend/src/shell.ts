@@ -16,6 +16,7 @@ import type * as monaco from 'monaco-editor';
 import {
   type BranchInfo,
   type CommitInfo,
+  type FileStatus,
   type Preview,
   type PreviewFile,
   type RepoEntry,
@@ -25,6 +26,7 @@ import { api } from './api';
 import { initBand, type Band } from './band';
 import { openBranchPalette } from './branchpalette';
 import { openCommitPalette } from './commitpalette';
+import { parseDeepLink, updateAddressBar, type DeepLinkRequest } from './deeplink';
 import { buildFileTree, type TreeNode } from './filetree';
 import { watchRepo, type LiveStream } from './live';
 import { forgetRecent, openRepoPicker, readRecents, rememberRecent } from './repopicker';
@@ -197,6 +199,11 @@ export function initShell(rootEl: HTMLElement): void {
 
   const status = document.createElement('div');
   status.className = 'ccd-status';
+  // role=status is a polite live region, so a message written here is announced
+  // without interrupting. Polite and not assertive deliberately: this slot
+  // carries "Loading commits…" as often as it carries a failure, and an
+  // assertive region would cut across the reader on every routine fetch.
+  status.role = 'status';
   statusEl = status;
 
   const list = document.createElement('ul');
@@ -246,7 +253,16 @@ export function initShell(rootEl: HTMLElement): void {
       rowsByPath.get(path)?.scrollIntoView({ block: 'nearest' });
     },
     describeSkipped,
-    onError: (path, err) => setStatus(`Error loading ${path}: ${errorMessage(err)}`)
+    // The same palette the selection crumb opens, reached from the empty
+    // state's own button so a reader who has landed on nothing does not have to
+    // find their way back up to the breadcrumb to get out of it.
+    onChooseCommits: () =>
+      openCommitPalette({
+        commits,
+        selected: selection,
+        onApply: (next) => void selectCommits(next)
+      }),
+    onError: (path, err) => setStatus(`Error loading ${path}: ${errorMessage(err)}`, 'error')
   });
 
   void boot();
@@ -260,22 +276,36 @@ export function initShell(rootEl: HTMLElement): void {
  * the boot REPO_ROOT as `defaultRepoId`, which is what keeps single-repo
  * behaviour identical to before any of this existed — start the backend with
  * REPO_ROOT, get that repo.
+ *
+ * A deep link overrides all of that, and does NOT fall back to it. A link that
+ * names a repository this backend refuses must not quietly open a different one
+ * — the reader would be reviewing something other than what they followed a
+ * link to, with nothing on screen saying so. The backend's own refusal text is
+ * reported instead, and the repo crumb still offers the picker.
  */
 async function boot(): Promise<void> {
   const e = beginEpoch();
   setStatus('Loading repository…');
 
-  let listing: ReposListing;
+  // Read before anything can overwrite it. updateAddressBar() hangs off
+  // renderTrail(), which initShell() has already called once by now — it no-ops
+  // while no repo is adopted, and this line is why that guard matters.
+  const link = parseDeepLink(window.location.search);
+
+  let entry: RepoEntry | null;
   try {
-    listing = await api.repos();
+    // A link and "the repository I had open last" are mutually exclusive
+    // intents; merging them is how a link silently opens the wrong repo.
+    entry = link ? await api.registerRepo(link.repoPath) : await preferredRepo(await api.repos());
   } catch (err) {
     if (stale(e)) return;
-    setStatus(`Error loading repositories: ${errorMessage(err)}`);
+    setStatus(
+      link
+        ? `Cannot open ${link.repoPath} from the link: ${errorMessage(err)}`
+        : `Error loading repositories: ${errorMessage(err)}`,
+    );
     return;
   }
-  if (stale(e)) return;
-
-  const entry = await preferredRepo(listing);
   if (stale(e)) return;
   if (!entry) {
     setStatus('No repository configured. Start the backend with REPO_ROOT set.');
@@ -283,7 +313,7 @@ async function boot(): Promise<void> {
   }
 
   adoptRepo(entry);
-  await loadRepoRefs();
+  await loadRepoRefs(link);
 }
 
 /**
@@ -429,7 +459,9 @@ function renderTrail(): void {
       // The full refname, because the display name does not identify a ref: a
       // local branch may be called `origin/main`, which renders exactly as the
       // remote-tracking `refs/remotes/origin/main` does.
-      title: `${branch.ref} — click to switch branch`,
+      title: linkRefMissing
+        ? `${branch.ref} — the link named ${linkRefMissing}, which this repository does not have`
+        : `${branch.ref} — click to switch branch`,
       onClick: () =>
         openBranchPalette({
           branches,
@@ -460,6 +492,13 @@ function renderTrail(): void {
   }
 
   topBar?.setCrumbs(crumbs);
+
+  // The same funnel, for the same reason: every entry point that can change what
+  // is under review already ends here, so this is where the URL naming it stays
+  // true without a second set of hooks to keep in sync. It writes nothing until
+  // a repository is adopted — see updateAddressBar, where that guard is what
+  // stops initShell's first paint from erasing an incoming link.
+  updateAddressBar({ repoPath: repo?.path ?? '', ref: selectedRef, shas: selection.map((c) => c.sha) });
 }
 
 /** `4221baf · Add User.email…`, or how many commits when it is more than one. */
@@ -543,10 +582,49 @@ export async function revealPath(path: string, line?: number, rev?: string): Pro
  * and only `loadBranches()` can establish it. Skipping the commit load when the
  * branch load failed is the same invariant seen from the other side: there is no
  * ref to ask for.
+ *
+ * `link`, when a deep link named one, overrides the two defaults that sequence
+ * would otherwise pick: HEAD's branch and its newest commit. It rides through as
+ * a parameter rather than as a second load path — every request below is the one
+ * the app already makes, so a link's bad ref or bad SHA lands in the error
+ * handling that already exists for a hand-made selection.
  */
-async function loadRepoRefs(): Promise<void> {
-  if (await loadBranches()) await loadCommits();
+async function loadRepoRefs(link?: DeepLinkRequest | null): Promise<void> {
+  if (!(await loadBranches())) return;
+  applyLinkedRef(link);
+  await loadCommits(link?.shas ?? undefined);
 }
+
+/**
+ * The ref a deep link named, if this repository has it.
+ *
+ * Runs between `loadBranches()` (which has just set `selectedRef` to HEAD's
+ * branch) and `loadCommits()` (which reads it), so it is an override of an
+ * already-valid value and never the thing that establishes one. Synchronous, so
+ * it needs no epoch of its own, for the reason `selectBranch` does not either:
+ * nothing awaits between it and the load that follows.
+ *
+ * A ref the repository does not have leaves the reader on HEAD and is reported
+ * on the branch crumb rather than in the status line — `loadCommits()` writes
+ * "Loading commits…" on its very next line, so a status written here would be
+ * gone within the tick. The crumb is also where someone checks "am I on the
+ * branch that link named".
+ */
+function applyLinkedRef(link?: DeepLinkRequest | null): void {
+  if (!link?.ref) return;
+  const target = branches.find((b) => b.ref === link.ref);
+  if (!target) {
+    linkRefMissing = link.ref;
+    return;
+  }
+  selectedRef = target.ref;
+}
+
+// The ref a deep link named that this repository does not have, or '' when the
+// link's ref was honoured (or there was none). Read by renderTrail() for the
+// branch crumb's tooltip; cleared by selectBranch, because a branch picked by
+// hand supersedes a stale link.
+let linkRefMissing = '';
 
 /**
  * Fills the branch picker from the current repo and selects HEAD's branch.
@@ -562,7 +640,7 @@ async function loadBranches(): Promise<boolean> {
     loaded = await api.branches(requireRepoId());
   } catch (err) {
     if (stale(e)) return false;
-    setStatus(`Error loading branches: ${errorMessage(err)}`);
+    setStatus(`Error loading branches: ${errorMessage(err)}`, 'error');
     return false;
   }
   if (stale(e)) return false;
@@ -595,6 +673,7 @@ async function loadBranches(): Promise<boolean> {
 async function selectBranch(ref: string): Promise<void> {
   if (ref === selectedRef) return;
   selectedRef = ref;
+  linkRefMissing = '';
   renderTrail();
   await loadCommits();
 }
@@ -612,8 +691,15 @@ async function selectBranch(ref: string): Promise<void> {
  * 400 — where the fallback would quietly list HEAD's commits underneath a
  * branch picker naming something else, which in a review tool is a wrong answer
  * dressed as a right one.
+ *
+ * `initialShas` opens that selection instead of the newest commit. They are
+ * handed on as bare SHAs wearing empty metadata, which never reaches the screen:
+ * `selectCommits` takes the selection it renders from `/api/preview`'s own
+ * records, so a linked commit older than this page of the log still arrives with
+ * its subject — and one that does not exist is one clean 404 rather than a row
+ * of blanks.
  */
-async function loadCommits(): Promise<void> {
+async function loadCommits(initialShas?: string[]): Promise<void> {
   const e = beginEpoch();
   setStatus('Loading commits…');
   let loaded: CommitInfo[];
@@ -621,7 +707,7 @@ async function loadCommits(): Promise<void> {
     loaded = await api.commits(requireRepoId(), selectedRef);
   } catch (err) {
     if (stale(e)) return;
-    setStatus(`Error loading commits: ${errorMessage(err)}`);
+    setStatus(`Error loading commits: ${errorMessage(err)}`, 'error');
     return;
   }
   if (stale(e)) return;
@@ -634,7 +720,7 @@ async function loadCommits(): Promise<void> {
     return;
   }
 
-  await selectCommits([newest]);
+  await selectCommits(initialShas?.length ? initialShas.map(placeholderCommit) : [newest]);
 }
 
 /**
@@ -736,8 +822,17 @@ function sameSelection(a: CommitInfo[], b: CommitInfo[]): boolean {
   return a.length === b.length && a.every((commit, i) => commit.sha === b[i]?.sha);
 }
 
-function isCommit(commit: CommitInfo | undefined): commit is CommitInfo {
-  return commit !== undefined;
+/**
+ * A SHA with no metadata yet, for asking `selectCommits` about a commit this
+ * session has never listed — which is every commit a deep link names.
+ *
+ * The blank fields are never rendered: `selectCommits` replaces the whole
+ * selection with `/api/preview`'s records before it paints. Inventing plausible
+ * text here instead would be the thing that *could* reach the screen, and it
+ * would be a lie about which commit the reader is looking at.
+ */
+function placeholderCommit(sha: string): CommitInfo {
+  return { sha, subject: '', author: '', date: '' };
 }
 
 /**
@@ -758,16 +853,17 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
     result = await api.preview(requireRepoId(), next.map((c) => c.sha));
   } catch (err) {
     if (stale(e)) return;
-    setStatus(`Error loading commit: ${errorMessage(err)}`);
+    setStatus(`Error loading commit: ${errorMessage(err)}`, 'error');
     return;
   }
   if (stale(e)) return;
 
-  // Reordered into the backend's canonical newest-first order. `byShaOrder`
-  // keeps the CommitInfo the caller supplied — the backend answers in SHAs, and
-  // the metadata behind them is what the header and palette render.
-  const bySha = new Map(next.map((c) => [c.sha, c]));
-  selection = result.shas.map((sha) => bySha.get(sha)).filter(isCommit);
+  // The backend's own records, not the caller's: already newest-first, and read
+  // straight off the git objects, so a commit outside the ref's listed page
+  // still arrives with its subject. Trusting `next` instead worked only for
+  // commits the caller had metadata for — true for a palette pick, false for a
+  // selection named from outside the app.
+  selection = result.commits;
   spanRevs = { headSha: result.spanHeadSha, baseSha: result.spanBaseSha };
   files = result.files;
   activePath = '';
@@ -788,16 +884,14 @@ async function selectCommits(next: CommitInfo[]): Promise<void> {
   // deleted file would be hiding a change.
   band?.render(requireRepoId(), files);
 
-  // Fixed wording rather than the registry's extension list: with a dozen-plus
-  // languages, spelling out ".kt/.ts/.tsx/.js/..." in a sentence stops reading
-  // as a sentence.
-  setStatus(
-    files.length > 0
-      ? ''
-      : selection.length > 1
-        ? 'No reviewable source files changed in these commits.'
-        : 'No reviewable source files changed in this commit.',
-  );
+  // Nothing, either way. "No reviewable source files changed" used to be
+  // written here, into a muted line in the corner of the sidebar, while the
+  // column the reader was actually looking at stayed empty — so the message was
+  // both easy to miss and unable to offer a way out. band.ts renders that state
+  // now, with the same reasoning about not enumerating extensions and a button
+  // back to the commit palette. Saying it in two places would only be two
+  // places to keep in step.
+  setStatus('');
 }
 
 // ---------------------------------------------------------------------------
@@ -915,6 +1009,17 @@ function dirItem(node: DirNode, depth: number): HTMLLIElement {
 }
 
 /**
+ * What A/M/D are called out loud. Only the accessible name uses these — the
+ * badge stays a single letter, because the whole reason it is a letter is that
+ * a tree of two hundred rows cannot spend a word each on saying so.
+ */
+const STATUS_WORDS: Record<FileStatus, string> = {
+  A: 'added',
+  M: 'modified',
+  D: 'deleted',
+};
+
+/**
  * One file: the same row the flat list rendered, with two differences — the
  * label is the basename and the indent comes from `depth`.
  *
@@ -929,10 +1034,21 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
   // Still the full path, not the shortened label: the tooltip is where the
   // path the row no longer spells out comes back.
   row.title = node.path;
+  // Same reasoning dirItem already states — the sidebar is the primary way
+  // around a review, so its rows have to be reachable without a mouse. Only the
+  // directory rows ever got it, which left the tab order able to open a folder
+  // and unable to reach a single thing inside it. These rows are the
+  // destinations; they are the half that had to be keyboard-reachable.
+  row.role = 'button';
+  row.tabIndex = 0;
 
   const badge = document.createElement('span');
   badge.className = `ccd-badge ccd-badge-${node.status}`;
   badge.textContent = node.status;
+  // A one-letter badge is a fine glyph and a terrible thing to hear: read out,
+  // the row was "A deeplink.ts". Hidden here and spelled into the row's own
+  // label below, so the status is announced as a word exactly once.
+  badge.ariaHidden = 'true';
 
   const pathEl = document.createElement('span');
   pathEl.className = 'ccd-file-path';
@@ -956,10 +1072,21 @@ function fileRow(node: FileNode, depth: number): HTMLLIElement {
     row.title = `${node.path}\n\n${warn.title}`;
   }
 
-  row.addEventListener('click', () => {
+  row.ariaLabel = `${node.path}, ${STATUS_WORDS[node.status]}`;
+
+  const open = (): void => {
     revealPath(node.path).catch((err: unknown) => {
-      setStatus(`Error loading diff: ${errorMessage(err)}`);
+      setStatus(`Error loading diff: ${errorMessage(err)}`, 'error');
     });
+  };
+
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    // Space scrolls the file list, which would move the row out from under the
+    // reader the moment they act on it — the same reason dirItem preventDefaults.
+    e.preventDefault();
+    open();
   });
 
   rowsByPath.set(node.path, row);
@@ -996,8 +1123,23 @@ function highlightActiveRow(): void {
   }
 }
 
-function setStatus(message: string): void {
-  if (statusEl) statusEl.textContent = message;
+/**
+ * Whether a status line is reporting progress or a failure.
+ *
+ * One slot carries both — "Loading commits…" and "Error loading diff: …" — and
+ * until this existed they were the same muted grey 12px text, so a request that
+ * had failed looked exactly like one still running. A reader waiting on the
+ * first has no reason to suspect the second.
+ */
+type StatusKind = 'info' | 'error';
+
+function setStatus(message: string, kind: StatusKind = 'info'): void {
+  if (!statusEl) return;
+  statusEl.textContent = message;
+  // Colour is the redundant half here, never the carrier: every message that
+  // passes 'error' already begins with the word, so the two agree rather than
+  // the red having to be noticed.
+  statusEl.classList.toggle('ccd-status-error', kind === 'error');
 }
 
 function errorMessage(err: unknown): string {

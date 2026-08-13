@@ -28,6 +28,7 @@ import { LANGUAGES, languageForPath, type DefLocation } from '@ctrlclickdiff/sha
 import { api } from './api';
 import { getOrCreateModel, modelUri, parseModelUri } from './diff';
 import { applyPeekScope } from './peekscope';
+import { sizePeekFor } from './peeklayout';
 
 // Memoizes GET /api/file per "<repoId>/<rev>/<path>" so the two
 // provideDefinition calls per click (see file header, fact 1) never
@@ -207,6 +208,15 @@ export function registerDefinitions(inReview: InReview): void {
       // is that widget's business, and peekscope.ts is the only file that should
       // have to know it.
       applyPeekScope({ inReview: inside.map((l) => l.uri), outside: outside.map((l) => l.uri) });
+
+      // How the peek splits itself between the answer and the choice, which is
+      // a function of how many candidates there are — and Monaco decides it
+      // once, from a constant, before it has seen them. Here rather than inside
+      // applyPeekScope because they are different questions: that one is which
+      // candidates belong to the review, this one is whether there is a choice
+      // to present at all. Both have to be asked before the widget is built,
+      // which is why they sit together at the end of the provider.
+      sizePeekFor(defs.length);
 
       // In-review first, and a stable partition, so the resolver's same-file
       // hits stay ahead of its cross-file ones inside each half. This decides

@@ -28,7 +28,7 @@
 //     scrollbar does not lie. Models are never disposed (see diff.ts's
 //     loadModels), so coming back costs no request either.
 
-import type { PreviewFile } from '@ctrlclickdiff/shared';
+import type { FileStatus, PreviewFile } from '@ctrlclickdiff/shared';
 import type * as monaco from 'monaco-editor';
 import { createFileDiff, createFileView, type FileDiff } from './diff';
 
@@ -39,6 +39,17 @@ import { createFileDiff, createFileView, type FileDiff } from './diff';
  * on screen is a jump. It also has to cover a fast scroll — a card that only
  * began loading as it appeared would show its placeholder for a round trip.
  */
+/**
+ * What A/M/D are called in the summary's accessible name. The badge beside each
+ * count stays a letter for the same reason it does everywhere else — it is a
+ * glyph, and a glyph is a poor thing to hear.
+ */
+const SUMMARY_WORDS: Record<FileStatus, string> = {
+  A: 'added',
+  M: 'modified',
+  D: 'deleted',
+};
+
 const MOUNT_MARGIN_PX = 1200;
 
 /**
@@ -76,6 +87,8 @@ interface Card {
   el: HTMLElement;
   body: HTMLElement;
   twisty: HTMLButtonElement;
+  /** The `+n −m` slot in the header. Empty until this card has been mounted once. */
+  churn: HTMLElement;
   diff: FileDiff | null;
   /** In-flight mount, so two observer ticks cannot build two editors. */
   pending: Promise<FileDiff | null> | null;
@@ -114,6 +127,13 @@ export interface BandHooks {
   onActivePath(path: string): void;
   /** The ⚠ tooltip for a file with skipped commits. Owned by the shell: only it knows commit subjects. */
   describeSkipped(shas: string[]): string;
+  /**
+   * Opens the commit palette. The way out of an empty review, which is the one
+   * state where the column has nothing to show and so has to offer something
+   * instead. A hook rather than an import because the palette needs the commit
+   * list and the current selection, and both live in the shell.
+   */
+  onChooseCommits(): void;
   /** Surfaces a mount failure. The band has no status line of its own. */
   onError(path: string, err: unknown): void;
 }
@@ -184,6 +204,7 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
         }
         card.diff = diff;
         card.el.classList.remove('loading');
+        void showChurn(card, diff, e, token);
         return diff;
       },
       (err: unknown) => {
@@ -197,6 +218,45 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
 
     card.pending = pending;
     return pending;
+  }
+
+  /**
+   * Writes `+n −m` into a card's header once its diff has been computed.
+   *
+   * Awaits `whenDiffComputed` rather than reading straight after the mount,
+   * because `churn()` is null until Monaco's worker has answered — the same
+   * readiness the reveal maths waits on. Guarded by both the band epoch and the
+   * card's own token for the same reason every await in this file is: the
+   * selection can change, or this one card can be scrolled away from, while the
+   * worker is still thinking, and a number written after either would be
+   * describing a diff that is no longer on screen.
+   *
+   * A count only appears once a card has been mounted, which is when the reader
+   * arrives at it. That is a real limitation and an accepted one: the honest
+   * alternative — asking git — answers a different question (see FileDiff.churn).
+   */
+  async function showChurn(card: Card, diff: FileDiff, e: number, token: number): Promise<void> {
+    await diff.whenDiffComputed();
+    if (e !== bandEpoch || token !== card.token || card.diff !== diff) return;
+
+    const counts = diff.churn();
+    if (!counts) return;
+
+    card.churn.replaceChildren();
+    // Two spans rather than one string, because the two numbers are coloured
+    // with the same green and red the lines themselves use — which is the whole
+    // point of putting them here, and is why they are also written with a sign
+    // rather than relying on that colour to say which is which.
+    for (const [cls, text] of [
+      ['ccd-churn-add', `+${counts.added}`],
+      ['ccd-churn-del', `−${counts.removed}`]
+    ] as const) {
+      const part = document.createElement('span');
+      part.className = cls;
+      part.textContent = text;
+      card.churn.append(part);
+    }
+    card.churn.title = `${counts.added} added, ${counts.removed} removed`;
   }
 
   /**
@@ -301,6 +361,16 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
       header.append(warn);
     }
 
+    // Last, so it sits at the far right of the header past the ⚠ rather than
+    // between the name and its own warning. Filled in by mount() once Monaco
+    // has computed the diff, which is also the only moment it CAN be: the count
+    // comes off the editor, and cards mount lazily. Empty until then rather
+    // than a spinner or a zero — the path is what identifies a card, so an
+    // absent number costs nothing while a wrong one would be read as fact.
+    const churn = document.createElement('span');
+    churn.className = 'ccd-card-churn';
+    header.append(churn);
+
     const body = document.createElement('div');
     body.className = 'ccd-card-body';
     body.style.height = `${UNMEASURED_HEIGHT_PX}px`;
@@ -313,6 +383,7 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
       el,
       body,
       twisty,
+      churn,
       diff: null,
       pending: null,
       token: 0,
@@ -464,6 +535,102 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     active = '';
   }
 
+  /**
+   * What a review with no reviewable files says.
+   *
+   * It goes in the band because that is where the reader is looking — the same
+   * sentence used to be a line of muted 12px text in the corner of the sidebar
+   * while the main column was 1290x850 of nothing, which reads as a tool that
+   * has broken rather than one with an answer.
+   *
+   * The languages are named as a category and not enumerated: 641f86e removed
+   * the extension list on the grounds that a sentence spelling out a dozen
+   * suffixes stops being a sentence, and that is still true here. What this
+   * adds over the old wording is the second half of an empty state — why it
+   * happened, and something to do about it.
+   */
+  function buildEmpty(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'ccd-band-empty';
+
+    const title = document.createElement('p');
+    title.className = 'ccd-empty-title';
+    title.textContent = 'Nothing to review here';
+
+    const body = document.createElement('p');
+    body.className = 'ccd-empty-body';
+    body.textContent =
+      'Nothing in this selection is in a language CtrlClickDiff can read — a commit ' +
+      'that only touches docs, configuration or shell scripts looks empty here.';
+
+    const action = document.createElement('button');
+    action.className = 'ccd-btn';
+    action.type = 'button';
+    action.textContent = 'Choose different commits';
+    action.addEventListener('click', () => hooks.onChooseCommits());
+
+    el.append(title, body, action);
+    return el;
+  }
+
+  /**
+   * How big this review is, above the first card: a file count and a breakdown
+   * by status.
+   *
+   * Both come straight off `PreviewFile[]`, so this is on screen the moment the
+   * preview lands — before any editor exists. That is the whole reason it is
+   * counted here and not summed from the per-card churn: cards mount lazily, so
+   * a total built from them would start wrong and creep towards right as the
+   * reader scrolled, which is worse than not showing one.
+   *
+   * NOT sticky, deliberately. It answers "what am I about to read", once; the
+   * card headers are the sticky layer and a second one would compete with them
+   * for the same edge.
+   */
+  function buildSummary(files: PreviewFile[]): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'ccd-band-summary';
+
+    const count = document.createElement('span');
+    count.className = 'ccd-summary-count';
+    count.textContent = files.length === 1 ? '1 file' : `${files.length} files`;
+    el.append(count);
+
+    // Only the statuses actually present, so a plain edit does not carry two
+    // zeroes explaining what did not happen.
+    for (const status of ['A', 'M', 'D'] as const) {
+      const n = files.filter((f) => f.status === status).length;
+      if (n === 0) continue;
+
+      const group = document.createElement('span');
+      group.className = 'ccd-summary-group';
+
+      const badge = document.createElement('span');
+      // The same badge vocabulary the rows and card headers use — a reader who
+      // has learned it once should not have to learn a second spelling here.
+      badge.className = `ccd-badge ccd-badge-${status}`;
+      badge.textContent = status;
+      badge.ariaHidden = 'true';
+
+      const label = document.createElement('span');
+      label.textContent = String(n);
+
+      group.append(badge, label);
+      group.ariaLabel = `${n} ${SUMMARY_WORDS[status]}`;
+      el.append(group);
+    }
+
+    const skipped = files.filter((f) => f.skippedShas.length > 0).length;
+    if (skipped > 0) {
+      const warn = document.createElement('span');
+      warn.className = 'ccd-summary-warn';
+      warn.textContent = `⚠ ${skipped} also carry unselected edits`;
+      el.append(warn);
+    }
+
+    return el;
+  }
+
   function cardOf(target: Element): Card | undefined {
     const path = (target as HTMLElement).dataset.path;
     return path === undefined ? undefined : byPath.get(path);
@@ -478,7 +645,10 @@ export function initBand(host: HTMLElement, hooks: BandHooks): Band {
     // argument, making every card after the first a context card.
     cards = files.map((file) => buildCard(file));
     for (const card of cards) byPath.set(card.file.path, card);
-    host.append(...cards.map((c) => c.el));
+    host.append(
+      files.length === 0 ? buildEmpty() : buildSummary(files),
+      ...cards.map((c) => c.el)
+    );
     host.scrollTop = 0;
 
     mountObserver = new IntersectionObserver(

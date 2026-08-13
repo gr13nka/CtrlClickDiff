@@ -2,6 +2,7 @@ import './monaco-env';
 import * as monaco from 'monaco-editor';
 import { registerDefinitions } from './defprovider';
 import { installTheme } from './theme';
+import { installUriLabels } from './urilabel';
 import {
   initShell,
   revealPath,
@@ -59,6 +60,22 @@ declare global {
   }
 }
 // ---------------------------------------------------------------------------
+
+// FIRST, before anything else in this file touches monaco. This swaps a service
+// into Monaco's container, and the container is built by whichever call reaches
+// it first and then frozen — `StandaloneServices.initialize` is
+// `if (initialized) return`, so a late call is a silent no-op that leaves the
+// peek printing the repo id and the 40-hex SHA.
+//
+// "Late" is easier to be than it looks, and this was measured rather than
+// reasoned: sitting next to installTheme() below, this call already lost, because
+// `registerDefinitions` runs first and `monaco.languages.registerDefinitionProvider`
+// reaches the container through `StandaloneServices.get`
+// (standaloneLanguages.js:375), which initializes with no overrides when it gets
+// there first (standaloneServices.js:716-719). `registerEditorOpener` and every
+// `createModel` do the same. There is no ordering rule to remember here beyond
+// this one: it goes at the top. See urilabel.ts.
+installUriLabels();
 
 const app = document.getElementById('app');
 if (!app) throw new Error('main.ts: #app element not found');
