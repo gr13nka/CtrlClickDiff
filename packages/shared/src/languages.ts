@@ -306,14 +306,13 @@ export const LANGUAGES: readonly Language[] = [
   },
   {
     id: 'cpp',
-    // '.h' is claimed here, not by a separate C entry: most real-world .h
-    // files in mixed repos are C++-flavored (guards, extern "C", classes
+    // '.h' is claimed here, not by the 'c' row directly above: most real-world
+    // .h files in mixed repos are C++-flavored (guards, extern "C", classes
     // forward-declared alongside C structs), and the cpp grammar parses a
-    // plain C header acceptably. Registry order between a future c entry and
-    // this one would not matter today even if both wanted '.h' -- extension
-    // matching is a linear find(), so whichever entry the resolver has yet
-    // to see loses -- but nothing else in this repo currently claims it, so
-    // there is nothing to order against.
+    // plain C header acceptably. That row lists '.c' only, so the two sets stay
+    // disjoint and registry order never decides '.h' -- but it would decide it
+    // the moment that row claimed it too, and it would win: extension matching
+    // is a linear find(), so the earlier row takes the path.
     extensions: ['.cpp', '.cc', '.cxx', '.hpp', '.hh', '.h'],
     // Each entry's one-line admissibility argument, made against
     // tags/cpp.scm specifically (a line starting with this prefix CANNOT
