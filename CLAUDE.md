@@ -204,16 +204,23 @@ caught it because an image cannot fail a typecheck. Re-run it after anything tha
 chrome. It selects `ccd-sample-repo` itself rather than trusting `REPO_ROOT`, so whatever repo
 the backend booted with cannot leak into a committed image.
 
-**Known, unfixed: on macOS that script cannot reach its third shot, because a peek poisons the next
-`render()`.** Once a peek has been opened, the following `band.render()` appends all 12 cards of
-`feature/wide` and then mounts **zero** editors — measured: 12 `.ccd-card`, 0 `.monaco-diff-editor`,
-0 `.loading`, empty status line, no console error and no failed request. Bisected over CDP:
-switching branch with no peek first mounts 9, and *revealing* a file first also mounts 9, so the
-peek is the trigger; closing it again first does not undo it, so "a widget is still open at render
-time" is **not** the mechanism — that was the first guess and it is wrong. Not caused by the
-`-E`/busy-pointer work: reproduced with those commits reverted. Whether it also happens on Linux is
-untested, and the committed screenshots suggest it does not. A reader hits this for real by peeking
-and then picking a different commit, so it is worth more than a harness annoyance.
+**A CDP run must hold the page focused, or it stops mounting editors and looks exactly like an app
+bug.** `Input.dispatchKeyEvent` with Escape drops headless Chromium to `visibilityState: "hidden"`,
+and a hidden page has no rendering lifecycle: `requestAnimationFrame` stops and — the part that
+matters here — **IntersectionObserver stops delivering**. Every editor in the band is mounted from
+an observer callback, so the next `render()` appends its cards and mounts nothing. Measured on
+`feature/wide`: 12 `.ccd-card`, **0** `.monaco-diff-editor`, 0 `.loading`, empty status line, no
+console error, no failed request — with `observe()` called 30 times and the callback run **zero**
+times, while the band's own box stayed a healthy 1292x856. `Emulation.setFocusEmulationEnabled`
+fixes it: same script, same gesture, 9 editors mounted and 10 after a scroll.
+
+This was first mis-diagnosed as "opening a peek poisons the next render", and the bisect that
+appeared to prove it (no peek → 9 editors, peek → 0) was really tracking whether an **Escape** had
+been dispatched, since the peek step was the only one that pressed one. Two lessons worth more than
+the bug: a symptom that survives reverting your own commits is not thereby an app defect — it can be
+the harness — and when a whole class of UI silently stops working in CDP, check
+`document.visibilityState` and whether `requestAnimationFrame` is still firing before reading any
+application code.
 
 Behaviour is verified **in a real browser**. Most of what matters here — peek rendering inside
 a diff, region auto-expansion on a jump, drag-resize relayout — has no meaningful assertion

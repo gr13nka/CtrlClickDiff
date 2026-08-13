@@ -23,15 +23,9 @@
 //    vacuously. The `mouseMoved` before the press is what makes Monaco resolve
 //    and underline the link — and it only underlines when a definition actually
 //    comes back, so a broken resolver looks exactly like a wrong modifier.
-//
-// KNOWN FAILURE, macOS: the wide-branch shot times out on 'the wide band'. Once
-// a peek has been opened, the NEXT band.render() lays out all 12 cards and then
-// mounts zero editors — measured: 12 cards, 0 .monaco-diff-editor, 0 .loading,
-// empty status line, no console error. Bisected: switching branch with no peek
-// first gives 9 mounted editors, and revealing a file first also gives 9, so the
-// peek is the trigger and closing it again does not undo it. It is NOT caused by
-// the platform-aware modifier below — reproduced with those commits reverted.
-// Unfixed and unexplained; the first two shots are produced normally.
+//  - the page must stay FOCUSED for the whole run — see setFocusEmulationEnabled
+//    below. This script dispatches Escape twice, and without that flag the first
+//    one silently ends the rendering lifecycle.
 //  - the word's position is found in the DOM rather than through the editor
 //    instance, because there is no longer a single editor to ask: every changed
 //    file has its own, and `window.__ccd.modifiedEditor` answers for whichever
@@ -184,6 +178,15 @@ async function clickRow(selector, needle, what) {
 
 await send('Page.enable');
 await send('Runtime.enable');
+// Keep the page focused, and therefore VISIBLE, for the whole run. Without this
+// a dispatched Escape drops headless Chromium to `visibilityState: "hidden"`,
+// which stops the rendering lifecycle: requestAnimationFrame stops firing and
+// **IntersectionObserver stops delivering**. band.ts mounts every editor from an
+// observer callback, so the next render lays out its cards and mounts nothing —
+// measured, 12 cards and 0 editors, with `observe()` called 30 times and the
+// callback never once. That looks exactly like an app bug and is not one; it
+// cost a full investigation before the visibility flag was noticed.
+await send('Emulation.setFocusEmulationEnabled', { enabled: true });
 await send('Emulation.setDeviceMetricsOverride', {
   width: W, height: H, deviceScaleFactor: 1, mobile: false,
 });
