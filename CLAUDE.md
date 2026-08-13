@@ -172,6 +172,29 @@ Resolver log lines from this fixture: `render` from `tools/cli.py` — 17 ms, 2 
 Python only; `render` from `web/App.tsx` — 13 ms, 2 candidates → 1 hit, the `.ts` sibling; `Greet`
 — 9 ms.
 
+**`make-sample-repo.sh` edits in place with `perl -i -pe`, and `sed -i` is not a portable
+alternative to it.** The two invocations that build `feature/wide`'s second commit were written in
+GNU sed's spelling and had only ever run on Linux: BSD sed (macOS) reads the argument after `-i` as
+a *mandatory* backup suffix, so it consumed the following `-e` and died with `sed: -e: No such file
+or directory`, and `\b` is a GNU extension it lacks, so even `sed -i ''` would have renamed nothing
+and written wrong content rather than failed. perl ships with macOS, its `-i` needs no suffix and
+`\b` is native. **Moving the patterns from BRE to PCRE is a silent-corruption trap, not a syntax
+one:** `(`, `)` and `+` are literals in BRE and metacharacters in perl, and the first attempt left
+`+` unescaped in `return base + if (order.status == …)` — perl read it as a quantifier on the
+preceding space, matched nothing and exited **0**, so that line stayed unedited and the commit made
+below it carried content no one had asked for. Escape `( ) +` in any future edit to those two calls,
+and check the *bytes* rather than the exit code: what caught this compared all 12 files the edit
+touches against an oracle that applied the original sed scripts to the parent revision under
+faithful BRE semantics.
+
+**The generator is deterministic, so a frozen SHA is a real check — but only `feature/wide`'s tip is
+the one that bites.** Dates are pinned, and three consecutive runs produce identical tips for all
+seven branches across both repos. Repo A's `main` is `4221baf` (the SHA the `switchRepo` note below
+quotes) and `feature/wide` *branches from* it, so it is upstream of the in-place edits and
+reproduces whether or not they worked — it was misleading enough to make one frozen-SHA check pass
+vacuously. The tip that moves is `feature/wide`'s, `339b80a` ("Rename log() to trace() package-wide;
+reweight priorityScore()", 12 files); compare that one after touching the generator.
+
 `docs/capture-screenshots.mjs` is a worked example of everything in the two paragraphs below —
 it drives the repo picker, both palettes and a real Ctrl+click peek, and asserts on
 `.zone-widget` and on the palette closing. Read it before writing a new CDP check. It also
