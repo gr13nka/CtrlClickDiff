@@ -11,7 +11,8 @@
 // showed a light Monaco and a `<select>` sidebar. Anything that changes the
 // chrome should re-run this.
 //
-// Three things here are load-bearing, all for reasons CLAUDE.md spells out:
+// Four things here are load-bearing, all for reasons docs/internals/verification.md
+// spells out:
 //
 //  - snap Chromium needs `--no-sandbox` and a profile dir it can actually reach.
 //    `~/.cache` is NOT one: it fails to create SingletonLock and aborts before

@@ -194,7 +194,7 @@ There is **no test runner** — behaviour is verified in a real browser, because
 here (peek rendering inside a diff, region auto-expansion on a jump, drag-resize relayout) has no
 meaningful assertion outside one.
 
-**If you are going to change this code, read [`CLAUDE.md`](CLAUDE.md) first.** It records the
-constraints that look arbitrary and are not, the bugs that have already been fixed once, and the
-reasoning behind decisions a reasonable person would otherwise undo. `TO-DOS.md` tracks anything
-still open.
+**If you are going to change this code, read [`CLAUDE.md`](CLAUDE.md) first.** It is a short index
+over [`docs/internals/`](docs/internals), one file per subsystem, which record the constraints that
+look arbitrary and are not, the bugs that have already been fixed once, and the reasoning behind
+decisions a reasonable person would otherwise undo. `TO-DOS.md` tracks anything still open.

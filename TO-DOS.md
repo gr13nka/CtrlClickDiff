@@ -1,7 +1,8 @@
 # TO-DOS
 
 Nothing open. The backlog captured on 2026-07-23 is fully implemented — see the sections below
-for what each item became, and `CLAUDE.md` for the constraints that fell out of building them.
+for what each item became, and `CLAUDE.md` — with `docs/internals/` behind it — for the constraints
+that fell out of building them.
 
 ## Shipped — 2026-07-29 (ghost squash)
 
@@ -10,7 +11,8 @@ for what each item became, and `CLAUDE.md` for the constraints that fell out of 
   object database, which is why peek and the symbol index needed no changes. Commits may be left
   out of the middle of a range: a docs-only commit disappears from a review of the code around
   it. The one case that cannot be exact — a file edited by both a selected and a skipped commit —
-  is shown and marked ⚠ rather than hidden. See `preview.ts` and the design notes in `CLAUDE.md`.
+  is shown and marked ⚠ rather than hidden. See `preview.ts` and the design notes in
+  `docs/internals/git-and-backend.md`.
 - **The sidebar's four stacked pickers became a header breadcrumb** — `repo › branch › selection`
   — with the view toggles on the right. The sidebar is now only the changed-file tree.
 - **Both `<select>`s became searchable palettes.** The app contains no `<select>` at all. The
