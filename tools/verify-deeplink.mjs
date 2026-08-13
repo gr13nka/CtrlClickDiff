@@ -25,7 +25,7 @@
 // lands but is empty until its editor mounts, and cards mount lazily.
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const BASE = process.argv[2] ?? 'http://localhost:5173';
@@ -38,9 +38,16 @@ const LINKED_REPO = join(homedir(), 'ccd-sample-repo-2');
 const LINKED_REF = 'refs/heads/feature/scoped-defs';
 const NO_SUCH_SHA = '0'.repeat(40);
 
-const profile = mkdtempSync(join(homedir(), 'snap/chromium/common/ccd-deeplink-'));
-const chrome = spawn('chromium', [
-  '--headless=new', '--no-sandbox', `--remote-debugging-port=${PORT}`,
+// Platform-specific, exactly as docs/capture-screenshots.mjs is: the snap
+// profile path and --no-sandbox are Linux's, and macOS has no `chromium` on
+// PATH. Without this the script cannot start at all off Linux — it died in
+// mkdtemp before ever reaching a check.
+const MAC = process.platform === 'darwin';
+const profile = mkdtempSync(
+  MAC ? join(tmpdir(), 'ccd-deeplink-') : join(homedir(), 'snap/chromium/common/ccd-deeplink-'),
+);
+const chrome = spawn(MAC ? '/Applications/Chromium.app/Contents/MacOS/Chromium' : 'chromium', [
+  '--headless=new', ...(MAC ? [] : ['--no-sandbox']), `--remote-debugging-port=${PORT}`,
   `--user-data-dir=${profile}`, `--window-size=${W},${H}`,
   '--no-first-run', '--disable-features=PaintHolding', 'about:blank',
 ], { stdio: ['ignore', 'pipe', 'pipe'] });
