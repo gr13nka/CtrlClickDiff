@@ -501,16 +501,26 @@ git commit -q -m "Add wide fixture package: 12 Kotlin files across 5 directories
 # middle of LongService.kt. That tweak is the whole point: ~60 untouched lines
 # sit on either side of it, so hideUnchangedRegions has something to collapse.
 #
-# Edited with sed rather than a second heredoc so LongService.kt's ~120 lines
-# live in exactly one place; duplicating them would mean editing both copies
-# in lockstep forever.
+# Edited in place rather than with a second heredoc so LongService.kt's ~120
+# lines live in exactly one place; duplicating them would mean editing both
+# copies in lockstep forever.
+#
+# perl and not `sed -i` because the GNU spelling of that is unportable twice
+# over: BSD sed (macOS) reads the argument after -i as a backup suffix, so it
+# swallowed the following -e and died with "sed: -e: No such file or directory",
+# and it has no \b either. perl's -i needs no suffix and \b is native. The
+# patterns are PCRE where sed's were BRE, so ( ) and + are metacharacters here
+# and are escaped to stay literal — an unescaped + turns "base + if" into a
+# quantifier that matches nothing, which is a silent no-op that would change the
+# commit made below rather than fail.
 # ---------------------------------------------------------------------------
 export GIT_AUTHOR_DATE="2024-01-07T00:00:00+00:00"
 export GIT_COMMITTER_DATE="2024-01-07T00:00:00+00:00"
 
-sed -i \
-  -e 's/\blog(/trace(/g' \
-  -e 's/^import org\.example\.wide\.util\.log$/import org.example.wide.util.trace/' \
+perl -i -pe '
+  s/\blog\(/trace(/g;
+  s/^import org\.example\.wide\.util\.log$/import org.example.wide.util.trace/;
+' \
   "$WIDE_DIR/util/Log.kt" \
   "$WIDE_DIR/util/Ids.kt" \
   "$WIDE_DIR/api/Routes.kt" \
@@ -523,9 +533,10 @@ sed -i \
   "$WIDE_DIR/ui/Screen.kt" \
   "$WIDE_DIR/ui/Widget.kt"
 
-sed -i \
-  -e 's/^    val base = itemCount(order) \* 2$/    val base = itemCount(order) * 3/' \
-  -e 's/^    return base + if (order.status == OrderStatus.PAID) 10 else 0$/    return base + if (order.status == OrderStatus.PAID) 25 else 0/' \
+perl -i -pe '
+  s/^    val base = itemCount\(order\) \* 2$/    val base = itemCount(order) * 3/;
+  s/^    return base \+ if \(order\.status == OrderStatus\.PAID\) 10 else 0$/    return base + if (order.status == OrderStatus.PAID) 25 else 0/;
+' \
   "$WIDE_DIR/core/LongService.kt"
 
 git add "$WIDE_DIR"
