@@ -125,7 +125,8 @@ started from, the review it is judged against belongs to the shell.
 
 ## Two known, unfixed defects in `peekscope.ts`
 
-Found in an audit, recorded rather than fixed:
+Found in an audit, recorded rather than fixed — both are on the backlog in
+[`../../TO-DOS.md`](../../TO-DOS.md), with the reasoning and how to verify a fix:
 
 - `labelSelector()` comma-joins selectors and its callers append ` .label-name`, which CSS binds to
   the **last** item only. With ≥2 in-review candidates, all but one get `font-weight: 600` on the

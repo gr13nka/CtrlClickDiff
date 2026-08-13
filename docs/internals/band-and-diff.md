@@ -115,6 +115,10 @@ disposes its editor instead of adopting it — an orphan would keep laying itsel
 `diff.ts`'s old single `diffEpoch` went. A stale call must also stay silent: the epoch holder owns
 the status line.
 
+Known and unfixed: that same stale guard in `mount()`'s **rejection** handler returns before
+`hooks.onError`, so a mount that fails after its card went stale leaves no log and no status — see
+the backlog in [`../../TO-DOS.md`](../../TO-DOS.md).
+
 ## Churn, and model URIs
 
 **Per-file churn comes from Monaco, not git, and will not equal `git diff --numstat`.**

@@ -1,8 +1,48 @@
 # TO-DOS
 
-Nothing open. The backlog captured on 2026-07-23 is fully implemented — see the sections below
-for what each item became, and `CLAUDE.md` — with `docs/internals/` behind it — for the constraints
-that fell out of building them.
+Three small items open, all found by audit rather than by anyone hitting them — see below. The
+backlog captured on 2026-07-23 is fully implemented; the sections after that record what each item
+became, and `CLAUDE.md` — with `docs/internals/` behind it — holds the constraints that fell out of
+building them.
+
+## Open — found 2026-08-13
+
+Each was found while auditing the macOS Ctrl/Cmd+click work and deliberately left alone: none was in
+scope, and none is causing a problem today. Ordered by how much they actually matter. None needs
+more than one session.
+
+- **`peekscope.ts`'s `watching` latch can stick, silently disabling the peek nudge for the rest of
+  the session.** `watching` is set `true` when a gesture starts watching for the widget, and cleared
+  only from inside a `requestAnimationFrame` callback — either when the widget is found or when the
+  1500 ms deadline passes. If rAF stops delivering before either (the tab is backgrounded, the
+  window hidden, the page bfcached), it stays `true` forever, and `if (watching) return;` then makes
+  every later `applyPeekScope` skip the watch. The reader loses the "prefer the in-review candidate"
+  nudge with no symptom except that peek starts opening on the wrong file; only a reload clears it.
+  The rendering-lifecycle behaviour behind this is the same one documented in
+  `docs/internals/verification.md` — a hidden page stops rAF and IntersectionObserver both. A
+  `visibilitychange` listener or a wall-clock fallback would do it; the fix should be *verified by
+  making rAF stop*, not by reading the code.
+  <br>**The only one of these three I would call a real bug.**
+
+- **`peekscope.ts`'s `labelSelector()` loses its suffix on all but the last selector.** It returns a
+  comma-joined selector *list*, and two callers concatenate ` .label-name` onto the string CSS binds
+  a descendant combinator to the **last** item only. So with two or more in-review candidates, every
+  one but the last gets `font-weight: 600` (and the italic rule) applied to the whole
+  `.monaco-icon-label` — filename *and* directory — instead of just the filename span, which the
+  code's own comment says is not what was wanted. Cosmetic, and invisible with a single candidate,
+  which is the common case and why it was never noticed. Fix is to map the suffix onto each selector
+  before joining. Needs a peek with ≥2 in-review candidate files to see: `feature/scoped-defs` in
+  repo B is the fixture that has one.
+
+- **`band.ts:213` discards a mount failure entirely.** In `mount()`'s rejection handler, the stale
+  guard (`e !== bandEpoch || token !== card.token`) returns before `hooks.onError`, so a card whose
+  editor failed to build while the reader scrolled past it produces no log, no status line and no
+  trace of any kind — indistinguishable from a card that simply never mounted. Latent: nothing
+  triggers it today, and it is *not* what caused the empty-band symptom investigated on 2026-08-13
+  (that was a CDP harness artifact — see `docs/internals/verification.md`). Worth closing anyway
+  because the whole class of "the review rendered no code and said nothing" is expensive to
+  diagnose: log on the discarded path even when it is too stale to show the reader, and consider
+  reporting a *count* of failures rather than letting each `setStatus` overwrite the last.
 
 ## Shipped — 2026-07-29 (ghost squash)
 
